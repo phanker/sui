@@ -221,7 +221,7 @@ mod testing {
     fn get_annotated_struct_layout(
         context: &NativeContext,
         ty: &Type,
-    ) -> PartialVMResult<A::MoveStructLayout> {
+    ) -> PartialVMResult<A::MoveDataTypeLayout> {
         let annotated_type_layout = context.type_to_fully_annotated_layout(ty)?.unwrap();
         match annotated_type_layout {
             A::MoveTypeLayout::Struct(annotated_struct_layout) => Ok(annotated_struct_layout),
@@ -289,8 +289,8 @@ mod testing {
         }
     }
 
-    fn is_vector_or_struct_move_value(mv: &A::MoveValue) -> bool {
-        matches!(mv, A::MoveValue::Vector(_) | A::MoveValue::Struct(_))
+    fn is_vector_or_struct_move_value(mv: &MoveValue) -> bool {
+        matches!(mv, A::MoveValue::Vector(_) | A::MoveValue::DataType(_))
     }
 
     /// Prints any `Value` in a user-friendly manner.
@@ -378,7 +378,7 @@ mod testing {
             // For a struct, we convert it to a MoveValue annotated with its field names and types and print it
             R::MoveTypeLayout::Struct(_) => {
                 let move_struct = match val.as_move_value(&ty_layout) {
-                    R::MoveValue::Struct(s) => s,
+                    R::MoveValue::DataType(s) => s,
                     _ => {
                         return Err(PartialVMError::new(StatusCode::INTERNAL_TYPE_ERROR)
                             .with_message("Expected MoveValue::MoveStruct".to_string()))
@@ -390,7 +390,7 @@ mod testing {
 
                 print_move_value(
                     out,
-                    A::MoveValue::Struct(decorated_struct),
+                    A::MoveValue::DataType(decorated_struct),
                     move_std_addr,
                     depth,
                     canonicalize,
@@ -512,7 +512,7 @@ mod testing {
                     )?;
                 }
             }
-            A::MoveValue::Struct(A::MoveStruct { type_, mut fields }) => {
+            A::MoveValue::Struct(A::MoveDataType { type_, mut fields }) => {
                 let type_tag = TypeTag::from(type_.clone());
 
                 // Check if struct is an std::string::String

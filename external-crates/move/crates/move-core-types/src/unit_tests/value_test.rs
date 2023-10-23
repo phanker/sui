@@ -2,6 +2,8 @@
 // Copyright (c) The Move Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
+
 use crate::{
     account_address::AccountAddress,
     annotated_value as A, ident_str,
@@ -26,13 +28,17 @@ fn struct_deserialization() {
         fields.into_iter().zip(avalues.clone()).collect();
 
     // test each deserialization scheme
-    let runtime_value = R::MoveStruct(values);
+    let runtime_value = R::MoveDataType(values);
+    let ser = R::MoveValue::DataType(runtime_value.clone())
+        .simple_serialize()
+        .unwrap();
+    println!("serialized: {:?}", ser);
     assert_eq!(
         serde_json::to_value(&runtime_value).unwrap(),
         json!([7, true])
     );
 
-    let typed_value = A::MoveStruct::new(struct_type, field_values);
+    let typed_value = A::MoveDataType(struct_type, field_values);
     assert_eq!(
         serde_json::to_value(&typed_value).unwrap(),
         json!({
@@ -42,6 +48,151 @@ fn struct_deserialization() {
         )
     );
 }
+
+// #[test]
+// fn enum_deserialization() {
+//     let enum_type = StructTag {
+//         address: AccountAddress::ZERO,
+//         name: ident_str!("MyEnum").to_owned(),
+//         module: ident_str!("MyModule").to_owned(),
+//         type_params: vec![],
+//     };
+//
+//     let values1 = vec![A::MoveValue::U64(7), A::MoveValue::Bool(true)];
+//     let fields1 = vec![ident_str!("f").to_owned(), ident_str!("g").to_owned()];
+//     let field_values1: Vec<(Identifier, A::MoveValue)> =
+//         fields1.into_iter().zip(values1.clone()).collect();
+//
+//     let values2 = vec![A::MoveValue::U64(8), A::MoveValue::Bool(false), A::MoveValue::U8(0)];
+//     let fields2 = vec![
+//         ident_str!("f2").to_owned(),
+//         ident_str!("g2").to_owned(),
+//         ident_str!("h2").to_owned(),
+//     ];
+//     let field_values2: Vec<(Identifier, A::MoveValue)> =
+//         fields2.into_iter().zip(values2.clone()).collect();
+//
+//     let enum_runtime_layout = {
+//         let variant_layout1 = vec![R::MoveTypeLayout::U64, R::MoveTypeLayout::Bool];
+//         let variant_layout2 = vec![
+//             R::MoveTypeLayout::U64,
+//             R::MoveTypeLayout::Bool,
+//             R::MoveTypeLayout::U8,
+//         ];
+//         let enum_layout = R::MoveDataTypeLayout::Enum {
+//             variants: vec![variant_layout1, variant_layout2],
+//         };
+//         R::MoveTypeLayout::Struct(enum_layout)
+//     };
+//
+//     let enum_with_types_layout = {
+//         let variant_layout1 = vec![
+//             A::MoveFieldLayout::new(ident_str!("f").to_owned(), A::MoveTypeLayout::U64),
+//             A::MoveFieldLayout::new(ident_str!("g").to_owned(), A::MoveTypeLayout::Bool),
+//         ];
+//         let variant_layout2 = vec![
+//             A::MoveFieldLayout::new(ident_str!("f2").to_owned(), A::MoveTypeLayout::U64),
+//             A::MoveFieldLayout::new(ident_str!("g2").to_owned(), A::MoveTypeLayout::Bool),
+//             A::MoveFieldLayout::new(ident_str!("h2").to_owned(), A::MoveTypeLayout::U8),
+//         ];
+//         let variant_map = vec![
+//             (ident_str!("Variant1").to_owned(), 0),
+//             (ident_str!("Variant2").to_owned(), 1),
+//         ]
+//         .into_iter()
+//         .zip(vec![variant_layout1, variant_layout2].into_iter())
+//         .collect();
+//         let enum_layout = A::MoveDataTypeLayout::Enum {
+//             variants: variant_map,
+//         };
+//         MoveTypeLayout::Struct(enum_layout)
+//     };
+//
+//     // test each deserialization scheme
+//     let runtime_value = MoveDataType::VariantRuntime {
+//         tag: 0,
+//         fields: values1,
+//     };
+//     let v = serde_json::to_value(&runtime_value).unwrap();
+//     assert_eq!(v, json!([0, [7, true]]));
+//
+//     let ser = MoveValue::DataType(runtime_value.clone())
+//         .simple_serialize()
+//         .unwrap();
+//     assert_eq!(
+//         MoveValue::simple_deserialize(&ser, &enum_runtime_layout).unwrap(),
+//         MoveValue::DataType(runtime_value),
+//     );
+//
+//     let runtime_value = MoveDataType::VariantRuntime {
+//         tag: 1,
+//         fields: values2,
+//     };
+//     assert_eq!(
+//         serde_json::to_value(&runtime_value).unwrap(),
+//         json!([1, [8, false, 0]])
+//     );
+//
+//     let fielded_value = MoveDataType::VariantWithFields {
+//         variant_tag: 0,
+//         variant_name: ident_str!("Variant1").to_owned(),
+//         fields: field_values1.clone(),
+//     };
+//     assert_eq!(
+//         serde_json::to_value(&fielded_value).unwrap(),
+//         json!({ "variant_name": "Variant1", "variant_tag": 0, "fields": { "f": 7, "g": true } })
+//     );
+//
+//     let fielded_value = MoveDataType::VariantWithFields {
+//         variant_tag: 1,
+//         variant_name: ident_str!("Variant2").to_owned(),
+//         fields: field_values2.clone(),
+//     };
+//     assert_eq!(
+//         serde_json::to_value(&fielded_value).unwrap(),
+//         json!({ "variant_name": "Variant2", "variant_tag": 1, "fields": { "f2": 8, "g2": false, "h2": 0} })
+//     );
+//
+//     let typed_value = MoveDataType::VariantWithTypes {
+//         type_: enum_type.clone(),
+//         variant_name: ident_str!("Variant1").to_owned(),
+//         variant_tag: 0,
+//         fields: field_values1,
+//     };
+//     assert_eq!(
+//         serde_json::to_value(&typed_value).unwrap(),
+//         json!({
+//             "type": "0x0::MyModule::MyEnum",
+//             "variant_name": "Variant1",
+//             "variant_tag": 0,
+//             "fields": {
+//                 "f": 7,
+//                 "g": true,
+//             }
+//         })
+//     );
+//
+//     let typed_value = MoveDataType::VariantWithTypes {
+//         type_: enum_type,
+//         variant_name: ident_str!("Variant2").to_owned(),
+//         variant_tag: 1,
+//         fields: field_values2,
+//     };
+//
+//     assert_eq!(
+//         serde_json::to_value(&typed_value).unwrap(),
+//         json!({
+//             "type": "0x0::MyModule::MyEnum",
+//             "variant_name": "Variant2",
+//             "variant_tag": 1,
+//             "fields": {
+//                 "f2": 8,
+//                 "g2": false,
+//                 "h2": 0
+//             }
+//         })
+//     );
+// }
 
 /// A test which verifies that the BCS representation of
 /// a struct with a single field is equivalent to the BCS
@@ -57,7 +208,7 @@ fn struct_one_field_equiv_value() {
         R::MoveValue::U8(13),
         R::MoveValue::U8(99),
     ]);
-    let s1 = R::MoveValue::Struct(R::MoveStruct(vec![val.clone()]))
+    let s1 = R::MoveValue::DataType(R::MoveDataType(vec![val.clone()]))
         .simple_serialize()
         .unwrap();
     let s2 = val.simple_serialize().unwrap();
@@ -93,15 +244,15 @@ fn nested_typed_struct_deserialization() {
     };
 
     // test each deserialization scheme
-    let nested_runtime_struct = R::MoveValue::Struct(R::MoveStruct(vec![R::MoveValue::U64(7)]));
-    let runtime_value = R::MoveStruct(vec![nested_runtime_struct]);
+    let nested_runtime_struct = R::MoveValue::DataType(R::MoveDataType(vec![MoveValue::U64(7)]));
+    let runtime_value = R::MoveDataType(vec![nested_runtime_struct]);
     assert_eq!(serde_json::to_value(&runtime_value).unwrap(), json!([[7]]));
 
-    let nested_typed_struct = A::MoveValue::Struct(A::MoveStruct::new(
+    let nested_typed_struct = A::MoveValue::DataType(A::MoveDataType::new(
         nested_struct_type,
         vec![(ident_str!("f").to_owned(), A::MoveValue::U64(7))],
     ));
-    let typed_value = A::MoveStruct::new(
+    let typed_value = A::MoveDataType::new(
         struct_type,
         vec![(ident_str!("inner").to_owned(), nested_typed_struct)],
     );

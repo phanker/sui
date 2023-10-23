@@ -6,7 +6,7 @@ use crate::module_cache::GetModule;
 use anyhow::{anyhow, bail, Result};
 use move_binary_format::{
     access::ModuleAccess,
-    file_format::{SignatureToken, StructDefinition, StructFieldInformation, StructHandleIndex},
+    file_format::{DataTypeHandleIndex, SignatureToken, StructDefinition, StructFieldInformation},
     normalized::{Struct, Type},
     CompiledModule,
 };
@@ -369,14 +369,14 @@ impl TypeLayoutBuilder {
                 resolver,
                 depth + 1,
             )?)),
-            Struct(shi) => A::MoveTypeLayout::Struct(StructLayoutBuilder::build_from_handle_idx(
+            DataType(shi) => A::MoveTypeLayout::Struct(StructLayoutBuilder::build_from_handle_idx(
                 m,
                 *shi,
                 vec![],
                 resolver,
                 depth + 1,
             )?),
-            StructInstantiation(shi, type_actuals) => {
+            DataTypeInstantiation(shi, type_actuals) => {
                 let actual_layouts = type_actuals
                     .iter()
                     .map(|t| {
@@ -410,7 +410,7 @@ impl StructLayoutBuilder {
     /// Construct an expanded `TypeLayout` from `s`.
     /// Panics if `resolver` cannot resolved a module whose types are referenced directly or
     /// transitively by `s`.
-    fn build(s: &StructTag, resolver: &impl GetModule, depth: u64) -> Result<A::MoveStructLayout> {
+    fn build(s: &StructTag, resolver: &impl GetModule, depth: u64) -> Result<A::MoveDataTypeLayout> {
         check_depth!(depth);
         let type_arguments = s
             .type_params
@@ -428,7 +428,7 @@ impl StructLayoutBuilder {
         depth: u64,
     ) -> Result<A::MoveStructLayout> {
         check_depth!(depth);
-        let s_handle = m.struct_handle_at(s.struct_handle);
+        let s_handle = m.data_type_handle_at(s.struct_handle);
         if s_handle.type_parameters.len() != type_arguments.len() {
             bail!("Wrong number of type arguments for struct")
         }
@@ -496,7 +496,7 @@ impl StructLayoutBuilder {
 
     fn build_from_handle_idx(
         m: &CompiledModule,
-        s: StructHandleIndex,
+        s: DataTypeHandleIndex,
         type_arguments: Vec<A::MoveTypeLayout>,
         resolver: &impl GetModule,
         depth: u64,
@@ -506,7 +506,7 @@ impl StructLayoutBuilder {
             // declared internally
             Self::build_from_definition(m, def, type_arguments, resolver, depth)
         } else {
-            let handle = m.struct_handle_at(s);
+            let handle = m.data_type_handle_at(s);
             let name = m.identifier_at(handle.name);
             let declaring_module = m.module_id_for_handle(m.module_handle_at(handle.module));
             // declared externally
