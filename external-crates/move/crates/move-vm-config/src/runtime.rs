@@ -63,6 +63,7 @@ impl Default for VMRuntimeLimitsConfig {
 #[cfg(debug_assertions)]
 #[derive(Clone, Debug)]
 pub struct VMProfilerConfig {
+    pub enabled: bool,
     /// Base path for files
     pub base_path: std::path::PathBuf,
     /// Whether or not to track bytecode instructions
@@ -75,6 +76,7 @@ pub struct VMProfilerConfig {
 impl std::default::Default for VMProfilerConfig {
     fn default() -> Self {
         Self {
+            enabled: false,
             base_path: std::path::PathBuf::from("."),
             track_bytecode_instructions: false,
             use_long_function_name: false,

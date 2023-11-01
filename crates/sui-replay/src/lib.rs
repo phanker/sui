@@ -178,6 +178,7 @@ pub async fn execute_replay_command(
                 use_authority,
                 None,
                 None,
+                None,
             )
             .await?;
 
@@ -258,6 +259,7 @@ pub async fn execute_replay_command(
                             tx_digest,
                             safety,
                             use_authority,
+                            None,
                             None,
                             None,
                         )
@@ -360,6 +362,7 @@ pub async fn execute_replay_command(
                 use_authority,
                 executor_version_override,
                 protocol_version_override,
+                None,
             )
             .await?;
 
