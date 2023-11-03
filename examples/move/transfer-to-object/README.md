@@ -1,3 +1,5 @@
+# Transfer-to-object: Cash Register example
+
 To understand better how transfer-to-object may be used, we're going to look at
 some possible ways of creating a cash register that can accept payments a couple different ways, and
 from that we can get a better sense of how transfer-to-object can be useful in these cases.
@@ -14,17 +16,24 @@ the payment (i.e., a way of tracking what the payment was for).
 /// `payment_id`.
 struct IdentifiedPayment has key {
     // Object ID
-    id: UID, 
+    id: UID,
     // The unique id for the good/service being paid for.
     payment_id: u64,
     // The payment
     coin: Coin<SUI>,
 }
+
 ```
 
 Customers can then make a payment with given payment ID to an address with `fun
 make_payment(payment_id: u64, coin: Coin<SUI>, to: address)` this will create
-an `IdentifiedPayment` and send it to the `to` address.
+an `IdentifiedPayment`, send it to the `to` address, and emit an even stating
+the payment's ID, who it's being payed to, the amount being payed, and who's
+paying it.
+
+Once the receiver has the identified payment, they can `unpack` the identified
+payment into the coin that was sent. This will then emit a separate event
+that marks the given payment ID as processed.
 
 With how we will represents payments out of the way, lets now take a look at a
 couple different ways that you could represent a cash register or perform
@@ -32,34 +41,42 @@ customer-to-business type transactions on-chain.
 
 ## Implementation 1: Using an account address
 
-In this scenario there isn't much to implement. If you run Bill's Burgers,
-you'll have an address `A` on-chain and when you take an order, you give the
-customer the payment id they should use and how much they should pay, they then
-send you an `IdentifiedPayment`, and you track this on your end and mark the
-bill as paid when you see the `IdentifiedPayment`.
+If you run Bill's Burgers, you'll have an address `A` on-chain and when you
+take an order, you give the customer the payment ID they should use and how
+much they should pay, they then send you an `IdentifiedPayment`, and you track
+this on your end and mark the bill as paid when you see the
+`SentPaymentEvent` with the given payment ID. 
 
-This is a very simple representation, however it has issues:
+Later on (either asynchronously or in a batch at the end of the day), you can
+process these paymens by iterating over the set of `IdentifiedPayment` objects
+under your account, `unpack`ing them, and then using the unpacked SUI coin.
+
+Overall, this is a very simple representation, and relatively easy to setup. However, it has some issues:
+
 1. If Bill's Burgers private key(s) for `A` are compromised it would need to
-   change it's address. This could cause issues for customers that are still
-   using the older address for the business.
+change it's address. This could cause issues for customers that are still
+using the older address for the business.
 2. If Bill's Burgers wants to permit multiple employees to access the cash
-   register it can only do via a multi-sig policy. However this could present
-   issues if an employee departs, or if there are a large number of employees
-   that Bill's Burgers wants to allow to access payments.
+register it can only do via a multi-sig policy. However this could present
+issues if an employee departs, or if there are a large number of employees
+that Bill's Burgers wants to allow to access payments.
 
 ## Implementation 2: Using a shared object
 
-To get around these issues Bill's Burgers could use a shared object. You can
-see how this might be implemented here: <LINK>.
+HERE
 
-By using a shared object Bill's Burgers solves the two issues above since:
+To get around some of these issues Bill's Burgers could use a shared object.
+This is implemented here: <LINK>.
+
+By using a shared object Bill's Burgers solves the two issues that were mentioned above since:
+
 1. If Bill's Burgers private key(s) are compromised it can simply create a new
-   address and change the "owner" field of the shared `Register` object to that
-   new account address.
+address and change the "owner" field of the shared `Register` object to that
+new account address.
 2. Bill's Burgers can add additional employees to the `Register`s
-   `authorized_employees` list. If an employee departs they can easily be
-   removed from this list as well without changing the object ID of the shared
-   `Register` object.
+`authorized_employees` list. If an employee departs they can easily be
+removed from this list as well without changing the object ID of the shared
+`Register` object.
 
 However, with the shared `Register` payments need to be made a different way
 than by simply transferring the coins to the shared object -- in particular
@@ -76,6 +93,7 @@ public fun make_shared_payment(register_uid: &mut UID, payment_id: u64, coin: Co
     };
     dynamic_object_field::add(register_uid, payment_id, identified_payment)
 }
+
 ```
 
 Because of this, if Bill's Burgers becomes incredibly popular across all their
@@ -95,12 +113,13 @@ it does this in the next example.
 ## Implementation 3: Using a shared object + transfer-to-object
 
 With transfer-to-object, we can get the benefits of both implementations:
-* The object ID stability of the shared object, and the ability to transfer the ownership of the object in case of key compromise.
-* Easy way of dynamically adding, removing, and enforcing permissions on who can withdraw payments.
-* Payments can all still be made using the `make_payment` function that uses
-  `sui::transfer::transfer` under the hood, so payments can happen in parallel
-  across all Bill's Burgers locations without needing to be sequenced against
-  the shared `Register` object for Bill's Burgers.
+
+- The object ID stability of the shared object, and the ability to transfer the ownership of the object in case of key compromise.
+- Easy way of dynamically adding, removing, and enforcing permissions on who can withdraw payments.
+- Payments can all still be made using the `make_payment` function that uses
+`sui::transfer::transfer` under the hood, so payments can happen in parallel
+across all Bill's Burgers locations without needing to be sequenced against
+the shared `Register` object for Bill's Burgers.
 
 You can see the entire implementation for the shared object register using
 transfer-to-object here: <LINK>. But let's go through this and see what
@@ -120,8 +139,9 @@ opaque to the customers -- they will always send their payment to the same
 At a high level, handling payments after they have been made using
 transfer-to-object resides somewhere between both Implementation 1, and
 Implementation 2. In particular:
-* Similar to Implementation 1, the object IDs of the payments you want to handle in that transaction will show up in the transaction's inputs;
-* Similar to Implementation 2, there are dynamic checks that are enforced on being able to access the sent payments.
+
+- Similar to Implementation 1, the object IDs of the payments you want to handle in that transaction will show up in the transaction's inputs;
+- Similar to Implementation 2, there are dynamic checks that are enforced on being able to access the sent payments.
 
 To really see what's going on here though it's best to go through the implementation of `handle_payment`:
 
@@ -135,6 +155,44 @@ public fun handle_payment(register: &mut Register, handle_payment: Receiving<Ide
     assert!(vector::contains(&register.authorized_employees, tx_context::sender(ctx)), ENotAuthorized);
     // Authorization check succcessful -- exchange the `handle_payment` ticket
     // for the `IdentifiedPayment` robject it is associated with and return it.
-    transfer::receive(&mut register.id, handle_payment)
+    transfer::public_receive(&mut register.id, handle_payment)
+}
+
+```
+
+### Adding tips using a custom `receive` rule
+
+One additional benefit of transfer-to-object is that in addition to being able
+to specify custom transfer rules for `key`-only objects, you can also
+specify custom receiving rules for `key`-only objects in a very similar manner:
+if an object is `key`-only, then the `sui::transfer::receive` function can be
+called in the module that defines the object, but not elsewhere -- elsewhere
+the `sui::transfer::public_receive` function must be called and can only be
+used on objects that also have the `store` ability.
+
+With this information, we can define a wrapper around `IdentifiedPayment`s
+where we can earmark that payment for a specific address, e.g., the address of
+our server. We can then use the the custom receive rule to ensure that only our
+server can access their tip, and no one else can.
+
+```
+struct EarmarkedPayment has key {
+    id: UID,
+    payment: IdentifiedPayment,
+    for: address,
+}
+```
+
+Since `EarmarkedPayment` is `key` only we can then define a custom receiving
+rule for it so that only the address that we specified for it can receive the
+payment:
+
+```
+public fun receive(parent: &mut UID, ticket: Receiving<EarmarkedPayment>, ctx: &TxContext): IdentifiedPayment {
+    let EarmarkedPayment { id, payment, for } = transfer::receive(parent, ticket);
+    // If the sender isn't the address we specified the transaction will abort.
+    assert!(tx_context::sender(ctx) == for, ENotEarmarkedForSender);
+    object::delete(id);
+    payment
 }
 ```

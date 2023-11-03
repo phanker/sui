@@ -1,11 +1,11 @@
-module shared_with_tto::shared_cash_register {
+module shared_no_tto::shared_cash_register {
     use common::identified_payment::{Self, IdentifiedPayment};
     use sui::sui::SUI;
-    use sui::coin::{Self, Coin};
+    use sui::coin::Coin;
     use sui::object::{Self, UID};
-    use sui::transfer::{Self, Receiving};
+    use sui::transfer;
     use sui::tx_context::{Self, TxContext};
-    use sui::event;
+    use sui::dynamic_object_field;
     use sui::vec_set::{Self, VecSet};
     use std::vector;
     use std::string::String;
@@ -20,8 +20,6 @@ module shared_with_tto::shared_cash_register {
         business_name: String,
         register_owner: address,
     }
-
-    struct PaymentProcessed has copy, drop { payment_id: u64, amount: u64 }
 
     /// Create a cash register for the business to use with an initial owner,
     /// business name, and authorized set of individuals that can process
@@ -83,23 +81,21 @@ module shared_with_tto::shared_cash_register {
         } 
     }
 
-    //--------------------------------------------------------------------------------
-    // Changes from here down only -- the rest is the same as in the previous example.
-    //--------------------------------------------------------------------------------
-
     /// Process a payment that has been made, removing it from the register and
     /// returning the coin that can then be combined or sent elsewhere by the authorized individual.
     /// Payments can ony be processed by either an account in the / `authorized_individuals` set or by the owner of the cash register.
-    public fun process_payment(register: &mut CashRegister, payment_ticket: Receiving<IdentifiedPayment>, ctx: &TxContext): Coin<SUI> {
+    public fun process_payment(register: &mut CashRegister, payment_id: u64, ctx: &TxContext): Coin<SUI> {
         let sender = tx_context::sender(ctx);
         assert!(vec_set::contains(&register.authorized_individuals, &sender) || sender == register.register_owner, ENotAuthorized);
-        let payment: IdentifiedPayment = transfer::receive(&mut register.id, payment_ticket);
-        let (payment_id, coin) = identified_payment::unpack(payment);
-        event::emit(PaymentProcessed { payment_id, amount: coin::value(&coin)});
+        assert!(dynamic_object_field::exists_(&register.id, payment_id), EInvalidPaymentID);
+        let payment: IdentifiedPayment = dynamic_object_field::remove(&mut register.id, payment_id);
+        let (_, coin) = identified_payment::unpack(payment);
         coin
     }
 
-    // NB: The `pay` function from the previous example is now gone! They can
-    // now just use `identified_payment::make_payment` as the shared
-    // `CashRegister` object does not need to be a part of the transaction.
+    /// Make a payment to the cash register -- this is the function that the
+    /// customer will use to make a payment to the cash register.
+    public fun pay(register: &mut CashRegister, payment_id: u64, coin: Coin<SUI>, ctx: &mut TxContext) {
+        identified_payment::make_shared_payment(&mut register.id, payment_id, coin, ctx);
+    }
 }
