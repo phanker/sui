@@ -304,6 +304,33 @@ fn make_complex_module_perm(p: Permutation) -> normalized::Module {
                     is_phantom: false,
                 }],
             },
+            DataTypeHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(p.permute(5)),
+                abilities: AbilitySet::PRIMITIVES,
+                type_parameters: vec![],
+            },
+            DataTypeHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(p.permute(6)),
+                abilities: AbilitySet::PRIMITIVES,
+                type_parameters: vec![DataTypeTyParameter {
+                    constraints: AbilitySet::PRIMITIVES,
+                    is_phantom: false,
+                }],
+            },
+            DataTypeHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(p.permute(7)),
+                abilities: AbilitySet::PRIMITIVES,
+                type_parameters: vec![],
+            },
+            DataTypeHandle {
+                module: ModuleHandleIndex(0),
+                name: IdentifierIndex(p.permute(8)),
+                abilities: AbilitySet::PRIMITIVES,
+                type_parameters: vec![],
+            },
         ]),
         struct_defs: p.pool(vec![
             // struct S { f: u64 }
@@ -432,7 +459,58 @@ fn make_complex_module_perm(p: Permutation) -> normalized::Module {
         struct_def_instantiations: vec![],
         function_instantiations: vec![],
         field_instantiations: vec![],
-        enum_defs: vec![],
+        enum_defs: p.pool(vec![
+            EnumDefinition {
+                enum_handle: DataTypeHandleIndex(p.permute(4)),
+                variants: vec![VariantDefinition {
+                    enum_def: EnumDefinitionIndex(p.permute(0)),
+                    variant_name: IdentifierIndex(p.permute(0)),
+                    fields: vec![FieldDefinition {
+                        name: IdentifierIndex(p.permute(4)),
+                        signature: TypeSignature(SignatureToken::U64),
+                    }],
+                }],
+            },
+            EnumDefinition {
+                enum_handle: DataTypeHandleIndex(p.permute(5)),
+                variants: vec![VariantDefinition {
+                    enum_def: EnumDefinitionIndex(p.permute(1)),
+                    variant_name: IdentifierIndex(p.permute(0)),
+                    fields: vec![
+                        FieldDefinition {
+                            name: IdentifierIndex(p.permute(5)),
+                            signature: TypeSignature(SignatureToken::U64),
+                        },
+                        FieldDefinition {
+                            name: IdentifierIndex(p.permute(3)),
+                            signature: TypeSignature(SignatureToken::TypeParameter(0)),
+                        },
+                    ],
+                }],
+            },
+            EnumDefinition {
+                enum_handle: DataTypeHandleIndex(p.permute(6)),
+                variants: vec![VariantDefinition {
+                    enum_def: EnumDefinitionIndex(p.permute(0)),
+                    variant_name: IdentifierIndex(p.permute(0)),
+                    fields: vec![FieldDefinition {
+                        name: IdentifierIndex(p.permute(4)),
+                        signature: TypeSignature(SignatureToken::U64),
+                    }],
+                }],
+            },
+            EnumDefinition {
+                enum_handle: DataTypeHandleIndex(p.permute(7)),
+                variants: vec![VariantDefinition {
+                    enum_def: EnumDefinitionIndex(p.permute(0)),
+                    variant_name: IdentifierIndex(p.permute(0)),
+                    fields: vec![FieldDefinition {
+                        name: IdentifierIndex(p.permute(4)),
+                        signature: TypeSignature(SignatureToken::U64),
+                    }],
+                }],
+            },
+        ]),
         enum_def_instantiations: vec![],
     };
     normalized::Module::new(&m)

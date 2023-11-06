@@ -230,6 +230,13 @@ pub trait ModuleAccess: Sync {
             name == self.identifier_at(handle.name)
         })
     }
+
+    fn find_enum_def_by_name(&self, name: &IdentStr) -> Option<&EnumDefinition> {
+        self.enum_defs().iter().find(|def| {
+            let handle = self.data_type_handle_at(def.enum_handle);
+            name == self.identifier_at(handle.name)
+        })
+    }
 }
 
 /// Represents accessors for a compiled script.

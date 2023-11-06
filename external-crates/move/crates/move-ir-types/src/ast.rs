@@ -1981,7 +1981,7 @@ fn format_move_value(v: &MoveValue) -> String {
                 .join(", ");
             format!("vector[{}]", items)
         }
-        MoveValue::DataType(_) | MoveValue::Signer(_) => {
+        MoveValue::Struct(_) | MoveValue::Signer(_) | MoveValue::Variant(_) => {
             panic!("Should be inexpressible as a constant")
         }
         MoveValue::U16(u) => format!("{}u16", u),

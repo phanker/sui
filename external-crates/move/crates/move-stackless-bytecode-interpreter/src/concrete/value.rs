@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use move_core_types::{
     account_address::AccountAddress,
     effects::{ChangeSet, Op},
-    runtime_value::{MoveDataType, MoveValue},
+    runtime_value::{MoveStruct, MoveValue},
     u256,
 };
 use move_model::ast::{MemoryLabel, TempIndex};
@@ -986,7 +986,7 @@ impl TypedValue {
                         full_field.into_move_value()
                     })
                     .collect();
-                MoveValue::DataType(MoveDataType::new(move_fields))
+                MoveValue::Struct(MoveStruct::new(move_fields))
             }
         }
     }

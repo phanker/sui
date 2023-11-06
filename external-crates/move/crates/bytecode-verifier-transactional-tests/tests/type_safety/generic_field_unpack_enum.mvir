@@ -1,0 +1,11 @@
+
+//# publish
+module 0x2.M {
+    enum X has drop { V { v: u64 } }
+    enum S<T> has drop { V { f: T } }
+    t(s: Self.S<Self.X>): u64 {
+    label b0:
+        return *(&(&(&s).S<Self.X>::f).X::v);
+    }
+}
+

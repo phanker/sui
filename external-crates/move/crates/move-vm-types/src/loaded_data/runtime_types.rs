@@ -13,8 +13,8 @@ use move_core_types::{
     gas_algebra::AbstractMemorySize, identifier::Identifier, language_storage::ModuleId,
     vm_status::StatusCode,
 };
+use std::fmt::Debug;
 use std::{cmp::max, collections::BTreeMap};
-use std::{fmt::Debug, sync::Arc};
 
 pub const TYPE_DEPTH_MAX: usize = 256;
 
@@ -140,8 +140,8 @@ pub struct CachedDataType {
 
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DataType {
-    Enum(Arc<EnumType>),
-    Struct(Arc<StructType>),
+    Enum(EnumType),
+    Struct(StructType),
 }
 
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -152,7 +152,9 @@ pub struct EnumType {
 
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct VariantType {
+    pub variant_name: Identifier,
     pub fields: Vec<Type>,
+    pub field_names: Vec<Identifier>,
     pub enum_def: EnumDefinitionIndex,
     pub variant_tag: VariantTag,
 }
@@ -165,9 +167,9 @@ pub struct StructType {
 }
 
 impl CachedDataType {
-    pub fn get_struct(&self) -> PartialVMResult<Arc<StructType>> {
+    pub fn get_struct(&self) -> PartialVMResult<&StructType> {
         match &self.data_type_info {
-            DataType::Struct(struct_type) => Ok(Arc::clone(struct_type)),
+            DataType::Struct(struct_type) => Ok(struct_type),
             x => Err(
                 PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
                     .with_message(format!("Expected struct type but got {:?}", x)),
@@ -175,9 +177,9 @@ impl CachedDataType {
         }
     }
 
-    pub fn get_enum(&self) -> PartialVMResult<Arc<EnumType>> {
+    pub fn get_enum(&self) -> PartialVMResult<&EnumType> {
         match &self.data_type_info {
-            DataType::Enum(enum_type) => Ok(Arc::clone(enum_type)),
+            DataType::Enum(enum_type) => Ok(enum_type),
             x => Err(
                 PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
                     .with_message(format!("Expected enum type but got {:?}", x)),

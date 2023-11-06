@@ -22,3 +22,28 @@ main() {
 label b0:
     return;
 }
+
+//# publish
+module 0x2.M {
+    enum Foo<T> has key { V { x: T } }
+
+    enum Bar<T1, T2: key, T3: copy + drop> { V { x: T3, y: T2, z: T1 } }
+}
+
+//# run
+import 0x2.M;
+
+main() {
+    let x: M.Foo<u64>;
+label b0:
+    return;
+}
+
+//# run
+import 0x2.M;
+
+main() {
+    let x: M.Bar<u64, M.Foo<u64>, bool>;
+label b0:
+    return;
+}

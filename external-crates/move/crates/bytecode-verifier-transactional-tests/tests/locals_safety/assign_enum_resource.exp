@@ -1,0 +1,19 @@
+processed 3 tasks
+
+task 1 'run'. lines 19-30:
+Error: Script execution failed with VMError: {
+    major_status: STLOC_UNSAFE_TO_DESTROY_ERROR,
+    sub_status: None,
+    location: script,
+    indices: [],
+    offsets: [(FunctionDefinitionIndex(0), 3)],
+}
+
+task 2 'run'. lines 32-42:
+Error: Script execution failed with VMError: {
+    major_status: STLOC_UNSAFE_TO_DESTROY_ERROR,
+    sub_status: None,
+    location: script,
+    indices: [],
+    offsets: [(FunctionDefinitionIndex(0), 3)],
+}

@@ -1,0 +1,4 @@
+processed 1 task
+
+task 0 'publish'. lines 2-10:
+Error: Unbound field f

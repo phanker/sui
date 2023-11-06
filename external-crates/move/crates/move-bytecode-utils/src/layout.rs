@@ -6,8 +6,11 @@ use crate::module_cache::GetModule;
 use anyhow::{anyhow, bail, Result};
 use move_binary_format::{
     access::ModuleAccess,
-    file_format::{DataTypeHandleIndex, SignatureToken, StructDefinition, StructFieldInformation},
-    normalized::{Struct, Type},
+    file_format::{
+        DataTypeHandleIndex, DataTypeTyParameter, SignatureToken, StructDefinition,
+        StructFieldInformation,
+    },
+    normalized::{Enum, Struct, Type},
     CompiledModule,
 };
 use move_core_types::{
@@ -16,7 +19,7 @@ use move_core_types::{
     identifier::{IdentStr, Identifier},
     language_storage::{ModuleId, StructTag, TypeTag},
 };
-use serde_reflection::{ContainerFormat, Format, Named, Registry};
+use serde_reflection::{ContainerFormat, Format, Named, Registry, VariantFormat};
 use std::{borrow::Borrow, collections::BTreeMap, fmt::Write};
 
 /// Name of the Move `address` type in the serde registry
@@ -37,6 +40,20 @@ macro_rules! check_depth {
             anyhow::bail!("Exceeded max value recursion depth when creating struct layout")
         }
     };
+}
+
+enum Container {
+    Struct(Struct),
+    Enum(Enum),
+}
+
+impl Container {
+    fn type_parameters(&self) -> &[DataTypeTyParameter] {
+        match self {
+            Container::Struct(s) => &s.type_parameters,
+            Container::Enum(e) => &e.type_parameters,
+        }
+    }
 }
 
 /// Type for building a registry of serde-reflection friendly struct layouts for Move types.
@@ -126,13 +143,13 @@ impl<'a, T: GetModule> SerdeLayoutBuilder<'a, T> {
     }
 
     /// Add layouts for all types used in `t` to the registry
-    pub fn build_struct_layout(&mut self, s: &StructTag) -> Result<Format> {
+    pub fn build_data_layout(&mut self, s: &StructTag) -> Result<Format> {
         let serde_type_args = s
             .type_params
             .iter()
             .map(|t| self.build_type_layout(t.clone()))
             .collect::<Result<Vec<Format>>>()?;
-        self.build_struct_layout_(&s.module_id(), &s.name, &serde_type_args, 0)
+        self.build_data_layout_(&s.module_id(), &s.name, &serde_type_args, 0)
     }
 
     fn build_normalized_type_layout(
@@ -164,7 +181,7 @@ impl<'a, T: GetModule> SerdeLayoutBuilder<'a, T> {
                     .map(|t| self.build_normalized_type_layout(t, input_type_args, depth + 1))
                     .collect::<Result<Vec<Format>>>()?;
                 let declaring_module = ModuleId::new(*address, module.clone());
-                self.build_struct_layout_(&declaring_module, name, &serde_type_args, depth + 1)?
+                self.build_data_layout_(&declaring_module, name, &serde_type_args, depth + 1)?
             }
             Vector(inner_t) => {
                 if matches!(inner_t.as_ref(), U8) {
@@ -183,7 +200,7 @@ impl<'a, T: GetModule> SerdeLayoutBuilder<'a, T> {
         })
     }
 
-    fn build_struct_layout_(
+    fn build_data_layout_(
         &mut self,
         module_id: &ModuleId,
         name: &Identifier,
@@ -200,36 +217,42 @@ impl<'a, T: GetModule> SerdeLayoutBuilder<'a, T> {
             .get_module_by_id(module_id)
             .map_err(|e| anyhow::format_err!("{:?}", e))?
             .expect("Failed to resolve module");
-        let def = declaring_module
-            .borrow()
-            .find_struct_def_by_name(name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "Could not find struct named {} in module {}",
-                    name,
-                    declaring_module.borrow().name()
-                )
-            });
-        let normalized_struct = Struct::new(declaring_module.borrow(), def).1;
+        let def = match (
+            declaring_module.borrow().find_struct_def_by_name(name),
+            declaring_module.borrow().find_enum_def_by_name(name),
+        ) {
+            (Some(struct_def), None) => {
+                Container::Struct(Struct::new(declaring_module.borrow(), struct_def).1)
+            }
+            (None, Some(enum_def)) => {
+                Container::Enum(Enum::new(declaring_module.borrow(), enum_def).1)
+            }
+            (Some(_), Some(_)) => panic!("Found both struct and enum with name {}", name),
+            (None, None) => panic!(
+                "Could not find struct named {} in module {}",
+                name,
+                declaring_module.borrow().name()
+            ),
+        };
         assert_eq!(
-            normalized_struct.type_parameters.len(),
+            def.type_parameters().len(),
             type_arguments.len(),
             "Wrong number of type arguments for struct"
         );
 
         let generics: Vec<String> = type_arguments
             .iter()
-            .zip(normalized_struct.type_parameters.iter())
+            .zip(def.type_parameters().iter())
             .filter(|(_, type_param)| {
                 // do not include phantom type arguments in the struct key, since they do not affect the struct layout
                 !(self.config.ignore_phantom_types && type_param.is_phantom)
             })
             .map(|(type_arg, _)| print_format_type(type_arg, depth))
             .collect::<Result<_>>()?;
-        let mut struct_key = String::new();
+        let mut type_key = String::new();
         if !self.config.omit_addresses {
             write!(
-                struct_key,
+                type_key,
                 "{}{}",
                 module_id.address(),
                 self.config.separator.as_deref().unwrap_or("::")
@@ -237,7 +260,7 @@ impl<'a, T: GetModule> SerdeLayoutBuilder<'a, T> {
             .unwrap();
         }
         write!(
-            struct_key,
+            type_key,
             "{}{}{}",
             module_id.name(),
             self.config.separator.as_deref().unwrap_or("::"),
@@ -246,7 +269,7 @@ impl<'a, T: GetModule> SerdeLayoutBuilder<'a, T> {
         .unwrap();
         if !generics.is_empty() {
             write!(
-                struct_key,
+                type_key,
                 "{}{}{}",
                 self.config.separator.as_deref().unwrap_or("<"),
                 generics.join(self.config.separator.as_deref().unwrap_or(",")),
@@ -255,30 +278,41 @@ impl<'a, T: GetModule> SerdeLayoutBuilder<'a, T> {
             .unwrap()
         }
         if self.config.shallow {
-            return Ok(Format::TypeName(struct_key));
+            return Ok(Format::TypeName(type_key));
         }
 
-        if let Some(old_struct) = self.registry.get(&struct_key) {
+        if let Some(old_data_type) = self.registry.get(&type_key) {
             if self.config.omit_addresses || self.config.separator.is_some() {
                 // check for conflicts (e.g., 0x1::M::T and 0x2::M::T that both get stripped to M::T because
                 // omit_addresses is on)
-                if old_struct.clone()
-                    != self.generate_serde_struct(normalized_struct, type_arguments, depth)?
+                if old_data_type.clone()
+                    != self.generate_serde_container(def, type_arguments, depth)?
                 {
                     panic!(
                         "Name conflict: multiple structs with name {}, but different addresses",
-                        struct_key
+                        type_key
                     )
                 }
             }
         } else {
             // not found--generate and update registry
-            let serde_struct =
-                self.generate_serde_struct(normalized_struct, type_arguments, depth)?;
-            self.registry.insert(struct_key.clone(), serde_struct);
+            let serde_data = self.generate_serde_container(def, type_arguments, depth)?;
+            self.registry.insert(type_key.clone(), serde_data);
         }
 
-        Ok(Format::TypeName(struct_key))
+        Ok(Format::TypeName(type_key))
+    }
+
+    fn generate_serde_container(
+        &mut self,
+        container: Container,
+        type_arguments: &[Format],
+        depth: u64,
+    ) -> Result<ContainerFormat> {
+        match container {
+            Container::Struct(s) => self.generate_serde_struct(s, type_arguments, depth),
+            Container::Enum(e) => self.generate_serde_enum(e, type_arguments, depth),
+        }
     }
 
     fn generate_serde_struct(
@@ -300,6 +334,53 @@ impl<'a, T: GetModule> SerdeLayoutBuilder<'a, T> {
             })
             .collect::<Result<Vec<Named<Format>>>>()?;
         Ok(ContainerFormat::Struct(fields))
+    }
+
+    fn generate_serde_enum(
+        &mut self,
+        normalized_enum: Enum,
+        type_arguments: &[Format],
+        depth: u64,
+    ) -> Result<ContainerFormat> {
+        check_depth!(depth);
+        let variants = normalized_enum
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let fields = v
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        self.build_normalized_type_layout(&f.type_, type_arguments, depth)
+                            .map(|value| Named {
+                                name: f.name.to_string(),
+                                value,
+                            })
+                    })
+                    .collect::<Result<Vec<Named<Format>>>>();
+                fields.map(|fields| {
+                    if fields.is_empty() {
+                        (
+                            i as u32,
+                            Named {
+                                name: v.name.to_string(),
+                                value: VariantFormat::Unit,
+                            },
+                        )
+                    } else {
+                        (
+                            i as u32,
+                            Named {
+                                name: v.name.to_string(),
+                                value: VariantFormat::Struct(fields),
+                            },
+                        )
+                    }
+                })
+            })
+            .collect::<Result<BTreeMap<u32, Named<VariantFormat>>>>()?;
+        Ok(ContainerFormat::Enum(variants))
     }
 }
 
@@ -346,9 +427,7 @@ impl TypeLayoutBuilder {
             Vector(elem_t) => {
                 A::MoveTypeLayout::Vector(Box::new(Self::build(elem_t, resolver, depth + 1)?))
             }
-            Struct(s) => {
-                A::MoveTypeLayout::Struct(StructLayoutBuilder::build(s, resolver, depth + 1)?)
-            }
+            Struct(s) => StructLayoutBuilder::build(s, resolver, depth + 1)?.into_layout(),
         })
     }
 
@@ -410,14 +489,25 @@ impl StructLayoutBuilder {
     /// Construct an expanded `TypeLayout` from `s`.
     /// Panics if `resolver` cannot resolved a module whose types are referenced directly or
     /// transitively by `s`.
-    fn build(s: &StructTag, resolver: &impl GetModule, depth: u64) -> Result<A::MoveDataTypeLayout> {
+    fn build(
+        s: &StructTag,
+        resolver: &impl GetModule,
+        depth: u64,
+    ) -> Result<A::MoveDataTypeLayout> {
         check_depth!(depth);
         let type_arguments = s
             .type_params
             .iter()
             .map(|t| TypeLayoutBuilder::build(t, resolver, depth))
             .collect::<Result<Vec<A::MoveTypeLayout>>>()?;
-        Self::build_from_name(&s.module_id(), &s.name, type_arguments, resolver, depth)
+        // TODO(tzakian)[enums] Handle enums here
+        Ok(A::MoveDataTypeLayout::Struct(Self::build_from_name(
+            &s.module_id(),
+            &s.name,
+            type_arguments,
+            resolver,
+            depth,
+        )?))
     }
 
     fn build_from_definition(

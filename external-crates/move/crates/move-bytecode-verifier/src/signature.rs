@@ -11,8 +11,8 @@ use move_binary_format::{
     errors::{Location, PartialVMError, PartialVMResult, VMResult},
     file_format::{
         AbilitySet, Bytecode, CodeUnit, CompiledModule, CompiledScript, DataTypeTyParameter,
-        FunctionDefinition, FunctionHandle, Signature, SignatureIndex, SignatureToken,
-        StructDefinition, StructFieldInformation, TableIndex,
+        EnumDefinition, FunctionDefinition, FunctionHandle, Signature, SignatureIndex,
+        SignatureToken, StructDefinition, StructFieldInformation, TableIndex,
     },
     file_format_common::VERSION_6,
     IndexKind,
@@ -37,7 +37,8 @@ impl<'a> SignatureChecker<'a> {
         };
         sig_check.verify_signature_pool(module.signatures())?;
         sig_check.verify_function_signatures(module.function_handles())?;
-        sig_check.verify_fields(module.struct_defs())?;
+        sig_check.verify_struct_fields(module.struct_defs())?;
+        sig_check.verify_enum_fields(module.enum_defs())?;
         sig_check.verify_code_units(module.function_handles(), module.function_defs())
     }
 
@@ -82,7 +83,7 @@ impl<'a> SignatureChecker<'a> {
         Ok(())
     }
 
-    fn verify_fields(&self, struct_defs: &[StructDefinition]) -> PartialVMResult<()> {
+    fn verify_struct_fields(&self, struct_defs: &[StructDefinition]) -> PartialVMResult<()> {
         for (struct_def_idx, struct_def) in struct_defs.iter().enumerate() {
             let fields = match &struct_def.field_information {
                 StructFieldInformation::Native => continue,
@@ -107,6 +108,35 @@ impl<'a> SignatureChecker<'a> {
                     &struct_handle.type_parameters,
                 )
                 .map_err(|err| err_handler(err, field_offset))?;
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_enum_fields(&self, enum_defs: &[EnumDefinition]) -> PartialVMResult<()> {
+        for (enum_def_idx, enum_def) in enum_defs.iter().enumerate() {
+            let enum_handle = self.resolver.data_type_handle_at(enum_def.enum_handle);
+            let err_handler = |err: PartialVMError, v_idx, f_idx| {
+                err.at_index(IndexKind::FieldDefinition, f_idx as TableIndex)
+                    .at_index(IndexKind::VariantTag, v_idx as TableIndex)
+                    .at_index(IndexKind::EnumDefinition, enum_def_idx as TableIndex)
+            };
+            for (tag, variant) in enum_def.variants.iter().enumerate() {
+                for (field_idx, field_def) in variant.fields.iter().enumerate() {
+                    self.check_signature_token(&field_def.signature.0)
+                        .map_err(|err| err_handler(err, tag, field_idx))?;
+                    let type_param_constraints: Vec<_> =
+                        enum_handle.type_param_constraints().collect();
+                    self.check_type_instantiation(&field_def.signature.0, &type_param_constraints)
+                        .map_err(|err| err_handler(err, tag, field_idx))?;
+
+                    self.check_phantom_params(
+                        &field_def.signature.0,
+                        false,
+                        &enum_handle.type_parameters,
+                    )
+                    .map_err(|err| err_handler(err, tag, field_idx))?;
+                }
             }
         }
         Ok(())

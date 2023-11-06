@@ -578,6 +578,8 @@ pub enum StatusCode {
     PARTIAL_ENUM_SWITCH = 1135,
     VARIANT_FIELDS_ALREADY_BORROWED_MUTABLE = 1136,
     ZERO_SIZED_ENUM = 1137,
+    RECURSIVE_ENUM_DEFINITION = 1138,
+    MAX_VARIANTS_REACHED = 1139,
 
     // These are errors that the VM might raise if a violation of internal
     // invariants takes place.

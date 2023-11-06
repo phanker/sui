@@ -14,7 +14,7 @@ use move_core_types::{
     account_address::AccountAddress,
     effects::Op,
     gas_algebra::AbstractMemorySize,
-    runtime_value::{MoveStructLayout, MoveTypeLayout},
+    runtime_value::{MoveEnumLayout, MoveStructLayout, MoveTypeLayout},
     u256,
     vm_status::{sub_status::NFE_VECTOR_ERROR_BASE, StatusCode},
 };
@@ -3340,13 +3340,36 @@ impl<'a, 'b> serde::Serialize for AnnotatedValue<'a, 'b, MoveTypeLayout, ValueIm
     }
 }
 
-impl<'a, 'b> serde::Serialize for AnnotatedValue<'a, 'b, MoveDataTypeLayout, Vec<ValueImpl>> {
+impl<'a, 'b> serde::Serialize for AnnotatedValue<'a, 'b, MoveStructLayout, Vec<ValueImpl>> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let values = &self.val;
         let fields = self.layout.fields();
         if fields.len() != values.len() {
             return Err(invariant_violation::<S>(format!(
                 "cannot serialize struct value {:?} as {:?} -- number of fields mismatch",
+                self.val, self.layout
+            )));
+        }
+        let mut t = serializer.serialize_tuple(values.len())?;
+        for (field_layout, val) in fields.iter().zip(values.iter()) {
+            t.serialize_element(&AnnotatedValue {
+                layout: field_layout,
+                val,
+            })?;
+        }
+        t.end()
+    }
+}
+
+impl<'a, 'b> serde::Serialize
+    for AnnotatedValue<'a, 'b, MoveEnumLayout, (VariantTag, Vec<ValueImpl>)>
+{
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let (tag, values) = &self.val;
+        let fields = &self.layout.0[*tag as usize];
+        if fields.len() != values.len() {
+            return Err(invariant_violation::<S>(format!(
+                "cannot serialize variant value {:?} as {:?} -- number of fields mismatch",
                 self.val, self.layout
             )));
         }
@@ -3434,31 +3457,28 @@ impl<'d> serde::de::DeserializeSeed<'d> for SeedWrapper<&MoveTypeLayout> {
     }
 }
 
-impl<'d> serde::de::DeserializeSeed<'d> for SeedWrapper<&MoveDataTypeLayout> {
+impl<'d> serde::de::DeserializeSeed<'d> for SeedWrapper<&MoveStructLayout> {
     type Value = Value;
 
     fn deserialize<D: serde::de::Deserializer<'d>>(
         self,
         deserializer: D,
     ) -> Result<Self::Value, D::Error> {
-        match &self.layout {
-            MoveDataTypeLayout::Runtime(field_layouts) => {
-                let fields = deserializer
-                    .deserialize_tuple(field_layouts.len(), StructFieldVisitor(field_layouts))?;
-                Ok(Value::struct_(Struct::pack(fields)))
-            }
-            MoveDataTypeLayout::EnumRuntime { variants } => {
-                let (tag, fields) =
-                    deserializer.deserialize_tuple(2, EnumFieldVisitor(variants))?;
-                Ok(Value::variant(Variant::pack(tag, fields)))
-            }
-            MoveDataTypeLayout::WithFields(..)
-            | MoveDataTypeLayout::WithTypes { .. }
-            | MoveDataTypeLayout::EnumWithFields { .. }
-            | MoveDataTypeLayout::EnumWithTypes { .. } => {
-                panic!("Cannot deserialize a value of this type")
-            }
-        }
+        let fields = deserializer
+            .deserialize_tuple(self.layout.0.len(), StructFieldVisitor(&self.layout.0))?;
+        Ok(Value::struct_(Struct::pack(fields)))
+    }
+}
+
+impl<'d> serde::de::DeserializeSeed<'d> for SeedWrapper<&MoveEnumLayout> {
+    type Value = Value;
+
+    fn deserialize<D: serde::de::Deserializer<'d>>(
+        self,
+        deserializer: D,
+    ) -> Result<Self::Value, D::Error> {
+        let (tag, fields) = deserializer.deserialize_tuple(2, EnumFieldVisitor(&self.layout.0))?;
+        Ok(Value::variant(Variant::pack(tag, fields)))
     }
 }
 
@@ -4019,7 +4039,7 @@ pub mod prop {
     }
 }
 
-use move_core_types::runtime_value::{MoveDataType, MoveValue};
+use move_core_types::runtime_value::{MoveStruct, MoveValue, MoveVariant};
 
 impl ValueImpl {
     pub fn as_move_value(&self, layout: &MoveTypeLayout) -> MoveValue {
@@ -4036,7 +4056,7 @@ impl ValueImpl {
             (L::Address, ValueImpl::Address(x)) => MoveValue::Address(*x),
 
             (
-                L::Enum(MoveDataTypeLayout::EnumRuntime { variants }),
+                L::Enum(MoveEnumLayout(variants)),
                 ValueImpl::Container(Container::Variant { tag, values }),
             ) => {
                 let tag = *tag.clone().borrow();
@@ -4045,7 +4065,7 @@ impl ValueImpl {
                 for (v, field_layout) in values.borrow().iter().zip(field_layouts.iter()) {
                     fields.push(v.as_move_value(field_layout));
                 }
-                MoveValue::DataType(MoveDataType::VariantRuntime { tag, fields })
+                MoveValue::Variant(MoveVariant { tag, fields })
             }
 
             (L::Struct(struct_layout), ValueImpl::Container(Container::Struct(r))) => {
@@ -4053,7 +4073,7 @@ impl ValueImpl {
                 for (v, field_layout) in r.borrow().iter().zip(struct_layout.fields().iter()) {
                     fields.push(v.as_move_value(field_layout));
                 }
-                MoveValue::DataType(MoveDataType::new(fields))
+                MoveValue::Struct(MoveStruct::new(fields))
             }
 
             (L::Vector(inner_layout), ValueImpl::Container(c)) => MoveValue::Vector(match c {

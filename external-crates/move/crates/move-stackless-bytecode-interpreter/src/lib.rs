@@ -386,7 +386,7 @@ fn convert_typed_value_to_move_value(ty: &BaseType, val: BaseValue) -> MoveValue
                 .map(|e| convert_typed_value_to_move_value(elem, e))
                 .collect(),
         ),
-        BaseType::Struct(inst) => MoveValue::DataType(MoveDataType::new(
+        BaseType::Struct(inst) => MoveValue::Struct(MoveStruct::new(
             val.into_struct()
                 .into_iter()
                 .zip(inst.fields.iter())

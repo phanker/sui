@@ -17,7 +17,7 @@ use move_binary_format::{
         FunctionDefinition, FunctionDefinitionIndex, FunctionHandleIndex,
         FunctionInstantiationIndex, Signature, SignatureIndex, SignatureToken,
         StructDefInstantiationIndex, StructDefinitionIndex, StructFieldInformation, TableIndex,
-        TypeParameterIndex, VariantJumpTable, VariantTag, Visibility,
+        TypeParameterIndex, VariantJumpTable, VariantTag,
     },
     IndexKind,
 };
@@ -306,11 +306,11 @@ impl ModuleCache {
                     defining_id,
                     runtime_id: runtime_id.clone(),
                     depth: None,
-                    data_type_info: DataType::Struct(Arc::new(StructType {
+                    data_type_info: DataType::Struct(StructType {
                         fields: vec![],
                         field_names,
                         struct_def: StructDefinitionIndex(idx as u16),
-                    })),
+                    }),
                 },
             )?;
 
@@ -336,7 +336,9 @@ impl ModuleCache {
                 .variants
                 .iter()
                 .enumerate()
-                .map(|(variant_tag, variant_def)| (variant_tag, &variant_def.fields))
+                .map(|(variant_tag, variant_def)| {
+                    (variant_tag, &variant_def.variant_name, &variant_def.fields)
+                })
                 .collect();
 
             variant_defs.push((idx, variant_info));
@@ -351,10 +353,10 @@ impl ModuleCache {
                     defining_id,
                     runtime_id: runtime_id.clone(),
                     depth: None,
-                    data_type_info: DataType::Enum(Arc::new(EnumType {
+                    data_type_info: DataType::Enum(EnumType {
                         variants: vec![],
                         enum_def: EnumDefinitionIndex(idx as u16),
-                    })),
+                    }),
                 },
             )?;
         }
@@ -372,15 +374,19 @@ impl ModuleCache {
 
         for (enum_def_idx, infos) in variant_defs.into_iter() {
             let mut variant_fields = vec![];
-            for (tag, fields) in infos.iter() {
-                let fields: Vec<_> = fields
-                    .iter()
-                    .map(|tok| self.make_type(module_view, &tok.signature.0))
-                    .collect::<PartialVMResult<_>>()?;
+            for (tag, name_idx, field_defs) in infos.iter() {
+                let mut fields = vec![];
+                let mut field_names = vec![];
+                for field in field_defs.iter() {
+                    fields.push(self.make_type(module_view, &field.signature.0)?);
+                    field_names.push(module.identifier_at(field.name).to_owned());
+                }
                 variant_fields.push(VariantType {
                     fields,
+                    field_names,
                     enum_def: EnumDefinitionIndex(enum_def_idx as u16),
                     variant_tag: *tag as u16,
+                    variant_name: module.identifier_at(**name_idx).to_owned(),
                 })
             }
 
@@ -397,48 +403,20 @@ impl ModuleCache {
             .zip(self.types.binaries.iter_mut().rev())
         {
             match Arc::get_mut(cached_type) {
-                Some(ref mut x) => {
-                    match (&mut x.data_type_info, field_info) {
-                        (DataType::Enum(ref mut x), FieldTypeInfo::Enum(field_info)) => {
-                            match Arc::get_mut(x) {
-                                Some(enum_type) => enum_type.variants = field_info,
-                                None => {
-                                    // we have pending references to the `Arc` which is impossible,
-                                    // given the code that adds the `Arc` is above and no reference to
-                                    // it should exist.
-                                    // So in the spirit of not crashing we just rewrite the entire `Arc`
-                                    // over and log the issue.
-                                    error!("Arc<EnumType> cannot have any live reference while publishing");
-                                    let mut enum_copy = (**x).clone();
-                                    enum_copy.variants = field_info;
-                                    *x = Arc::new(enum_copy);
-                                }
-                            };
-                        }
-                        (DataType::Struct(ref mut x), FieldTypeInfo::Struct(field_info)) => {
-                            match Arc::get_mut(x) {
-                                Some(struct_type) => struct_type.fields = field_info,
-                                None => {
-                                    // we have pending references to the `Arc` which is impossible,
-                                    // given the code that adds the `Arc` is above and no reference to
-                                    // it should exist.
-                                    // So in the spirit of not crashing we just rewrite the entire `Arc`
-                                    // over and log the issue.
-                                    error!("Arc<StructType> cannot have any live reference while publishing");
-                                    let mut struct_copy = (**x).clone();
-                                    struct_copy.fields = field_info;
-                                    *x = Arc::new(struct_copy);
-                                }
-                            }
-                        }
-                        _ => {
-                            return Err(
+                Some(ref mut x) => match (&mut x.data_type_info, field_info) {
+                    (DataType::Enum(ref mut enum_type), FieldTypeInfo::Enum(field_info)) => {
+                        enum_type.variants = field_info;
+                    }
+                    (DataType::Struct(ref mut struct_type), FieldTypeInfo::Struct(field_info)) => {
+                        struct_type.fields = field_info;
+                    }
+                    _ => {
+                        return Err(
                                 PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
                                 .with_message("Type mismatch when loading type into module cache -- enum and structs out of synch".to_owned()),
                                 );
-                        }
                     }
-                }
+                },
                 None => {
                     return Err(
                         PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
@@ -1735,33 +1713,6 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    pub(crate) fn field_handle_to_struct(&self, idx: FieldHandleIndex) -> Type {
-        match &self.binary {
-            BinaryType::Module { loaded, .. } => {
-                Type::DataType(loaded.field_handles[idx.0 as usize].owner)
-            }
-            BinaryType::Script(_) => unreachable!("Scripts cannot have field instructions"),
-        }
-    }
-
-    pub(crate) fn field_instantiation_to_struct(
-        &self,
-        idx: FieldInstantiationIndex,
-        args: &[Type],
-    ) -> PartialVMResult<Type> {
-        match &self.binary {
-            BinaryType::Module { loaded, .. } => Ok(Type::DataTypeInstantiation(
-                loaded.field_instantiations[idx.0 as usize].owner,
-                loaded.field_instantiations[idx.0 as usize]
-                    .instantiation
-                    .iter()
-                    .map(|ty| ty.subst(args))
-                    .collect::<PartialVMResult<Vec<_>>>()?,
-            )),
-            BinaryType::Script(_) => unreachable!("Scripts cannot have field instructions"),
-        }
-    }
-
     pub(crate) fn type_to_type_layout(&self, ty: &Type) -> PartialVMResult<R::MoveTypeLayout> {
         self.loader.type_to_type_layout(ty)
     }
@@ -2519,7 +2470,7 @@ struct FieldInstantiation {
     offset: usize,
     // `ModuelCache::structs` global table index. It is the generic type.
     #[allow(unused)]
-    owner: CachedStructIndex,
+    owner: CachedTypeIndex,
 }
 
 #[derive(Debug)]
@@ -2764,9 +2715,7 @@ impl Loader {
                         .collect::<PartialVMResult<Vec<_>>>()?;
                     variant_layouts.push(field_layouts);
                 }
-                MoveDataTypeLayout::EnumRuntime {
-                    variants: variant_layouts,
-                }
+                R::MoveDataTypeLayout::Enum(R::MoveEnumLayout(variant_layouts))
             }
             DataType::Struct(ref sinfo) => {
                 let field_tys = sinfo
@@ -2779,7 +2728,7 @@ impl Loader {
                     .map(|ty| self.type_to_type_layout_impl(ty, count, depth + 1))
                     .collect::<PartialVMResult<Vec<_>>>()?;
 
-                R::MoveDataTypeLayout::new(field_layouts)
+                R::MoveDataTypeLayout::Struct(R::MoveStructLayout::new(field_layouts))
             }
         };
 
@@ -2824,12 +2773,12 @@ impl Loader {
             Type::Vector(ty) => R::MoveTypeLayout::Vector(Box::new(
                 self.type_to_type_layout_impl(ty, count, depth + 1)?,
             )),
-            Type::DataType(gidx) => {
-                R::MoveTypeLayout::Struct(self.type_gidx_to_type_layout(*gidx, &[], count, depth)?)
-            }
-            Type::DataTypeInstantiation(gidx, ty_args) => {
-                R::MoveTypeLayout::Struct(self.type_gidx_to_type_layout(*gidx, ty_args, count, depth)?)
-            }
+            Type::DataType(gidx) => self
+                .type_gidx_to_type_layout(*gidx, &[], count, depth)?
+                .into_layout(),
+            Type::DataTypeInstantiation(gidx, ty_args) => self
+                .type_gidx_to_type_layout(*gidx, ty_args, count, depth)?
+                .into_layout(),
             Type::Reference(_) | Type::MutableReference(_) | Type::TyParam(_) => {
                 return Err(
                     PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
@@ -2857,28 +2806,67 @@ impl Loader {
             }
         }
 
-        let struct_type = self.module_cache.read().type_at(gidx).get_struct()?;
-        if struct_type.fields.len() != struct_type.field_names.len() {
-            return Err(
-                PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(
-                    "Field types did not match the length of field names in loaded struct"
-                        .to_owned(),
-                ),
-            );
-        }
+        // TODO(tzakian)[enums] Make sure we are not over counting nodes for enum variants
         let count_before = *count;
+        let ty = self.module_cache.read().type_at(gidx);
         let struct_tag = self.struct_gidx_to_type_tag(gidx, ty_args, DataTypeTagType::Defining)?;
-        let field_layouts = struct_type
-            .field_names
-            .iter()
-            .zip(&struct_type.fields)
-            .map(|(n, ty)| {
-                let ty = self.subst(ty, ty_args)?;
-                let l = self.type_to_fully_annotated_layout_impl(&ty, count, depth + 1)?;
-                Ok(A::MoveFieldLayout::new(n.clone(), l))
-            })
-            .collect::<PartialVMResult<Vec<_>>>()?;
-        let struct_layout = A::MoveDataTypeLayout::with_types(struct_tag, field_layouts);
+        let type_layout = match &ty.data_type_info {
+            DataType::Enum(enum_type) => {
+                let mut variant_layouts = BTreeMap::new();
+                for variant in enum_type.variants.iter() {
+                    if variant.fields.len() != variant.field_names.len() {
+                        return Err(
+                            PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR).with_message(
+                                "Field types did not match the length of field names in loaded enum variant"
+                                .to_owned(),
+                                ),
+                                );
+                    }
+                    let field_layouts = variant
+                        .field_names
+                        .iter()
+                        .zip(variant.fields.iter())
+                        .map(|(n, ty)| {
+                            let ty = self.subst(ty, ty_args)?;
+                            let l =
+                                self.type_to_fully_annotated_layout_impl(&ty, count, depth + 1)?;
+                            Ok(A::MoveFieldLayout::new(n.clone(), l))
+                        })
+                        .collect::<PartialVMResult<Vec<_>>>()?;
+                    variant_layouts.insert(
+                        (variant.variant_name.clone(), variant.variant_tag),
+                        field_layouts,
+                    );
+                }
+                A::MoveDataTypeLayout::Enum(A::MoveEnumLayout {
+                    type_: struct_tag.clone(),
+                    variants: variant_layouts,
+                })
+            }
+            DataType::Struct(struct_type) => {
+                if struct_type.fields.len() != struct_type.field_names.len() {
+                    return Err(
+                        PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
+                            .with_message(
+                            "Field types did not match the length of field names in loaded struct"
+                                .to_owned(),
+                        ),
+                    );
+                }
+                let field_layouts = struct_type
+                    .field_names
+                    .iter()
+                    .zip(&struct_type.fields)
+                    .map(|(n, ty)| {
+                        let ty = self.subst(ty, ty_args)?;
+                        let l = self.type_to_fully_annotated_layout_impl(&ty, count, depth + 1)?;
+                        Ok(A::MoveFieldLayout::new(n.clone(), l))
+                    })
+                    .collect::<PartialVMResult<Vec<_>>>()?;
+                A::MoveDataTypeLayout::Struct(A::MoveStructLayout::new(struct_tag, field_layouts))
+            }
+        };
+
         let field_node_count = *count - count_before;
 
         let mut cache = self.type_cache.write();
@@ -2888,10 +2876,10 @@ impl Loader {
             .or_default()
             .entry(ty_args.to_vec())
             .or_insert_with(DataTypeInfo::new);
-        info.annotated_layout = Some(struct_layout.clone());
+        info.annotated_layout = Some(type_layout.clone());
         info.annotated_node_count = Some(field_node_count);
 
-        Ok(struct_layout)
+        Ok(type_layout)
     }
 
     fn type_to_fully_annotated_layout_impl(
@@ -2920,12 +2908,12 @@ impl Loader {
             Type::Vector(ty) => A::MoveTypeLayout::Vector(Box::new(
                 self.type_to_fully_annotated_layout_impl(ty, count, depth + 1)?,
             )),
-            Type::DataType(gidx) => A::MoveTypeLayout::Struct(
-                self.struct_gidx_to_fully_annotated_layout(*gidx, &[], count, depth)?,
-            ),
-            Type::DataTypeInstantiation(gidx, ty_args) => A::MoveTypeLayout::Struct(
-                self.struct_gidx_to_fully_annotated_layout(*gidx, ty_args, count, depth)?,
-            ),
+            Type::DataType(gidx) => self
+                .struct_gidx_to_fully_annotated_layout(*gidx, &[], count, depth)?
+                .into_layout(),
+            Type::DataTypeInstantiation(gidx, ty_args) => self
+                .struct_gidx_to_fully_annotated_layout(*gidx, ty_args, count, depth)?
+                .into_layout(),
             Type::Reference(_) | Type::MutableReference(_) | Type::TyParam(_) => {
                 return Err(
                     PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)

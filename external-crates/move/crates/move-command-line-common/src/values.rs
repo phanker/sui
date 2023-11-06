@@ -83,7 +83,7 @@ impl ParsableValue for () {
     }
 
     fn concrete_struct(values: Vec<Self::ConcreteValue>) -> anyhow::Result<Self::ConcreteValue> {
-        Ok(MoveValue::DataType(MoveDataType(values)))
+        Ok(MoveValue::Struct(MoveStruct(values)))
     }
     fn into_concrete_value(
         self,

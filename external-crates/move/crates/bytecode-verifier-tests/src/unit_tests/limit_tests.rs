@@ -276,7 +276,7 @@ const MAX_FUNCTIONS: usize = 1000;
 #[test]
 fn max_struct_test() {
     let config = VerifierConfig {
-        max_struct_definitions: Some(MAX_STRUCTS),
+        max_data_definitions: Some(MAX_STRUCTS),
         max_fields_in_struct: Some(MAX_FIELDS),
         max_function_definitions: Some(MAX_FUNCTIONS),
         ..Default::default()
@@ -315,7 +315,7 @@ fn max_struct_test() {
 #[test]
 fn max_fields_test() {
     let config = VerifierConfig {
-        max_struct_definitions: Some(MAX_STRUCTS),
+        max_data_definitions: Some(MAX_STRUCTS),
         max_fields_in_struct: Some(MAX_FIELDS),
         max_function_definitions: Some(MAX_FUNCTIONS),
         ..Default::default()
@@ -380,7 +380,7 @@ fn max_fields_test() {
 #[test]
 fn max_functions_test() {
     let config = VerifierConfig {
-        max_struct_definitions: Some(MAX_STRUCTS),
+        max_data_definitions: Some(MAX_STRUCTS),
         max_fields_in_struct: Some(MAX_FIELDS),
         max_function_definitions: Some(MAX_FUNCTIONS),
         ..Default::default()
@@ -425,7 +425,7 @@ fn max_functions_test() {
 #[test]
 fn max_mixed_config_test() {
     let config = VerifierConfig {
-        max_struct_definitions: Some(MAX_STRUCTS),
+        max_data_definitions: Some(MAX_STRUCTS),
         max_fields_in_struct: Some(MAX_FIELDS),
         max_function_definitions: Some(MAX_FUNCTIONS),
         ..Default::default()
@@ -439,7 +439,7 @@ fn max_mixed_config_test() {
 
     let config = VerifierConfig {
         max_function_definitions: None,
-        max_struct_definitions: None,
+        max_data_definitions: None,
         max_fields_in_struct: None,
         ..Default::default()
     };
@@ -469,7 +469,7 @@ fn max_mixed_config_test() {
     assert_eq!(res, Ok(()));
 
     let config = VerifierConfig {
-        max_struct_definitions: Some(MAX_STRUCTS),
+        max_data_definitions: Some(MAX_STRUCTS),
         max_fields_in_struct: Some(MAX_FIELDS),
         ..Default::default()
     };
@@ -511,7 +511,7 @@ fn max_mixed_config_test() {
     );
 
     let config = VerifierConfig {
-        max_struct_definitions: Some(MAX_STRUCTS),
+        max_data_definitions: Some(MAX_STRUCTS),
         max_function_definitions: Some(MAX_FUNCTIONS),
         ..Default::default()
     };

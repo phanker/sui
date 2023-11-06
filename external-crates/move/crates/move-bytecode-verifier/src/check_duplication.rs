@@ -274,18 +274,24 @@ impl<'a> DuplicationChecker<'a> {
     }
 
     fn check_enum_definitions(&self) -> PartialVMResult<()> {
-        // StructDefinition - contained DataTypeHandle defines uniqueness
-        if let Some(idx) =
-            Self::first_duplicate_element(self.module.enum_defs().iter().map(|x| x.enum_handle))
-        {
+        // EnumDefinition - contained DataTypeHandle defines uniqueness
+        // NB: We check uniqueness across both enum and struct handles at this point to make sure
+        // data definitions are not duplicated across struct and enums.
+        if let Some(idx) = Self::first_duplicate_element(
+            self.module
+                .struct_defs()
+                .iter()
+                .map(|x| x.struct_handle)
+                .chain(self.module.enum_defs().iter().map(|x| x.enum_handle)),
+        ) {
             return Err(verification_error(
                 StatusCode::DUPLICATE_ELEMENT,
-                IndexKind::StructDefinition,
+                IndexKind::EnumDefinition,
                 idx,
             ));
         }
         // Variant names in enums must be unique
-        // Field names in each variant structs must be unique
+        // Field names in each variant must be unique
         for (enum_idx, enum_def) in self.module.enum_defs().iter().enumerate() {
             let variants = &enum_def.variants;
             if variants.is_empty() {
@@ -295,21 +301,21 @@ impl<'a> DuplicationChecker<'a> {
                     enum_idx as TableIndex,
                 ));
             }
-            // TODO(tzakian)[enums] Should we make VariantTag an index?
-            if let Some(_idx) =
+            if let Some(idx) =
                 Self::first_duplicate_element(variants.iter().map(|x| x.variant_name))
             {
                 return Err(verification_error(
                     StatusCode::DUPLICATE_ELEMENT,
                     IndexKind::EnumDefinition,
                     enum_idx as TableIndex,
-                ));
+                )
+                .at_index(IndexKind::VariantTag, idx as TableIndex));
             }
 
             // NB: we allow zero-sized variants: since we require non-empty enums we always have a
             // tag and therefore a variant with no fields is still non-zero sized whereas a struct
             // with zero fields is zero-sized.
-            for variant in variants.iter() {
+            for (tag, variant) in variants.iter().enumerate() {
                 if let Some(idx) =
                     Self::first_duplicate_element(variant.fields.iter().map(|x| x.name))
                 {
@@ -317,7 +323,9 @@ impl<'a> DuplicationChecker<'a> {
                         StatusCode::DUPLICATE_ELEMENT,
                         IndexKind::FieldDefinition,
                         idx,
-                    ));
+                    )
+                    .at_index(IndexKind::VariantTag, tag as TableIndex)
+                    .at_index(IndexKind::EnumDefinition, enum_idx as TableIndex));
                 }
             }
         }
@@ -332,7 +340,7 @@ impl<'a> DuplicationChecker<'a> {
             ));
         }
         // Check that each enum handle in self module is implemented (has a declaration)
-        // To also track struct handles, we pass in the set of struct handles that are implemented
+        // To also track enum handles, we pass in the set of enum handles that are implemented
         // and fill this set out with those as well.
         let implemented_data_type_handles: HashSet<DataTypeHandleIndex> = self
             .module

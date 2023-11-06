@@ -22,8 +22,8 @@ struct Context<'a, 'b> {
     resolver: BinaryIndexedView<'a>,
     // (Module -> CompiledModule) for (at least) all immediate dependencies
     dependency_map: BTreeMap<ModuleId, &'b CompiledModule>,
-    // (Module::StructName -> handle) for all types of all dependencies
-    struct_id_to_handle_map: BTreeMap<(ModuleId, Identifier), DataTypeHandleIndex>,
+    // (Module::DataTypeName -> handle) for all types of all dependencies
+    data_type_id_to_handle_map: BTreeMap<(ModuleId, Identifier), DataTypeHandleIndex>,
     // (Module::FunctionName -> handle) for all functions that can ever be called by this
     // module/script in all dependencies
     func_id_to_handle_map: BTreeMap<(ModuleId, Identifier), FunctionHandleIndex>,
@@ -74,7 +74,7 @@ impl<'a, 'b> Context<'a, 'b> {
         let mut context = Self {
             resolver,
             dependency_map,
-            struct_id_to_handle_map: BTreeMap::new(),
+            data_type_id_to_handle_map: BTreeMap::new(),
             func_id_to_handle_map: BTreeMap::new(),
             function_visibilities: BTreeMap::new(),
             script_functions,
@@ -84,13 +84,21 @@ impl<'a, 'b> Context<'a, 'b> {
         for (module_id, module) in &context.dependency_map {
             let friend_module_ids: BTreeSet<_> = module.immediate_friends().into_iter().collect();
 
-            // Module::StructName -> def handle idx
+            // Module::DataTypeName -> def handle idx
             for struct_def in module.struct_defs() {
                 let struct_handle = module.data_type_handle_at(struct_def.struct_handle);
                 let struct_name = module.identifier_at(struct_handle.name);
-                context.struct_id_to_handle_map.insert(
+                context.data_type_id_to_handle_map.insert(
                     (module_id.clone(), struct_name.to_owned()),
                     struct_def.struct_handle,
+                );
+            }
+            for enum_def in module.enum_defs() {
+                let enum_handle = module.data_type_handle_at(enum_def.enum_handle);
+                let enum_name = module.identifier_at(enum_handle.name);
+                context.data_type_id_to_handle_map.insert(
+                    (module_id.clone(), enum_name.to_owned()),
+                    enum_def.enum_handle,
                 );
             }
             // Module::FuncName -> def handle idx
@@ -229,7 +237,7 @@ fn verify_imported_structs(context: &Context) -> PartialVMResult<()> {
         let owner_module = safe_unwrap!(context.dependency_map.get(&owner_module_id));
         let struct_name = context.resolver.identifier_at(struct_handle.name);
         match context
-            .struct_id_to_handle_map
+            .data_type_id_to_handle_map
             .get(&(owner_module_id, struct_name.to_owned()))
         {
             Some(def_idx) => {

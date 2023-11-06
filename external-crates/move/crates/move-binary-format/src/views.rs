@@ -407,6 +407,75 @@ impl<'a, T: ModuleAccess> FieldDefinitionView<'a, T> {
     }
 }
 
+pub struct EnumDefinitionView<'a, T> {
+    module: &'a T,
+    enum_def: &'a EnumDefinition,
+    enum_handle_view: DataTypeHandleView<'a, T>,
+}
+
+impl<'a, T: ModuleAccess> EnumDefinitionView<'a, T> {
+    pub fn new(module: &'a T, enum_def: &'a EnumDefinition) -> Self {
+        let enum_handle = module.data_type_handle_at(enum_def.enum_handle);
+        let enum_handle_view = DataTypeHandleView::new(module, enum_handle);
+        Self {
+            module,
+            enum_def,
+            enum_handle_view,
+        }
+    }
+
+    pub fn abilities(&self) -> AbilitySet {
+        self.enum_handle_view.abilities()
+    }
+
+    pub fn type_parameters(&self) -> &Vec<DataTypeTyParameter> {
+        self.enum_handle_view.type_parameters()
+    }
+
+    pub fn variants(&self) -> impl DoubleEndedIterator<Item = VariantDefinitionView<'a, T>> + Send {
+        let module = self.module;
+        self.enum_def
+            .variants
+            .iter()
+            .map(|variant| VariantDefinitionView::new(module, variant))
+    }
+
+    /// Return the flattened fields of all variants of the enum
+    pub fn all_fields(&self) -> impl DoubleEndedIterator<Item = FieldDefinitionView<'a, T>> + Send {
+        self.variants().flat_map(|variant| variant.fields())
+    }
+
+    pub fn name(&self) -> &'a IdentStr {
+        self.enum_handle_view.name()
+    }
+}
+
+pub struct VariantDefinitionView<'a, T> {
+    module: &'a T,
+    variant_def: &'a VariantDefinition,
+}
+
+impl<'a, T: ModuleAccess> VariantDefinitionView<'a, T> {
+    pub fn new(module: &'a T, variant_def: &'a VariantDefinition) -> Self {
+        Self {
+            module,
+            variant_def,
+        }
+    }
+
+    pub fn fields(&self) -> impl DoubleEndedIterator<Item = FieldDefinitionView<'a, T>> + Send {
+        let module = self.module;
+        self.variant_def
+            .fields
+            .iter()
+            .map(|field_def| FieldDefinitionView::new(module, field_def))
+    }
+
+    pub fn name(&self) -> &'a IdentStr {
+        self.module.identifier_at(self.variant_def.variant_name)
+    }
+}
+
 pub struct LocalsSignatureView<'a, T> {
     function_def_view: FunctionDefinitionView<'a, T>,
 }
