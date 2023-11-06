@@ -105,7 +105,6 @@ export function CollapsibleCard({
 					)}
 				>
 					<CollapsibleCardHeader open={open} size={size} title={title} collapsible={collapsible} />
-
 					<div className={clsx(size === 'md' ? 'px-6' : 'px-4')}>
 						<Collapsible.Content>{children}</Collapsible.Content>
 					</div>
