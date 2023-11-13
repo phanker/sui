@@ -219,6 +219,19 @@ type CoinEdge {
 	cursor: String!
 }
 
+type CoinMetadata {
+	"""
+	Convert the coin metadata object into a Move object
+	"""
+	asMoveObject: MoveObject!
+	decimals: Int
+	name: String
+	symbol: String
+	description: String
+	iconUrl: String
+	supply: BigInt
+}
+
 type CommitteeMember {
 	authorityName: String
 	stakeUnit: Int
@@ -557,6 +570,10 @@ type MoveObject {
 	Attempts to convert the Move object into a `0x3::staking_pool::StakedSui`.
 	"""
 	asStake: Stake
+	"""
+	Attempts to convert the Move object into a `0x2::coin::CoinMetadata`.
+	"""
+	asCoinMetadata: CoinMetadata
 }
 
 type MovePackage {
@@ -917,6 +934,7 @@ type Query {
 	"""
 	resolveNameServiceAddress(name: String!): Address
 	latestSuiSystemState: SuiSystemStateSummary!
+	coinMetadata(coinType: String!): CoinMetadata
 }
 
 """
