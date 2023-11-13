@@ -4,7 +4,7 @@
 use super::{
     address::Address,
     checkpoint::{Checkpoint, CheckpointId},
-    coin::CoinMetadata,
+    coin_metadata::CoinMetadata,
     epoch::Epoch,
     event::{Event, EventFilter},
     object::{Object, ObjectFilter},
@@ -20,7 +20,7 @@ use crate::{
     error::{code, graphql_error, Error},
 };
 use async_graphql::{connection::Connection, *};
-use sui_json_rpc::{coin_api::parse_to_struct_tag, name_service::NameServiceConfig};
+use sui_json_rpc::name_service::NameServiceConfig;
 
 pub(crate) struct Query;
 pub(crate) type SuiGraphQLSchema = async_graphql::Schema<Query, EmptyMutation, EmptySubscription>;
@@ -220,27 +220,9 @@ impl Query {
         ctx: &Context<'_>,
         coin_type: String,
     ) -> Result<Option<CoinMetadata>> {
-        let coin_struct = parse_to_struct_tag(&coin_type)?;
-        let Some(coin_metadata) = ctx
-            .data_unchecked::<PgManager>()
-            .inner
-            .get_coin_metadata_raw_in_blocking_task(coin_struct.clone())
+        ctx.data_unchecked::<PgManager>()
+            .fetch_coin_metadata(coin_type)
             .await
-            .map_err(|e| Error::Internal(e.to_string()))
-            .extend()?
-        else {
-            return Ok(None);
-        };
-
-        // pass in the object to CoinMetadata, and lift these fields to the top-level?
-
-        Ok(Some(CoinMetadata {
-            decimals: Some(coin_metadata.decimals),
-            name: Some(coin_metadata.name.clone()),
-            symbol: Some(coin_metadata.symbol.clone()),
-            description: Some(coin_metadata.description.clone()),
-            icon_url: coin_metadata.icon_url.clone(),
-            coin_type,
-        }))
+            .extend()
     }
 }
