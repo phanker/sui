@@ -93,6 +93,7 @@ const MAX_PROTOCOL_VERSION: u64 = 32;
 //             Create new execution layer version, and preserve previous behavior in v1.
 //             Update semantics of `sui::transfer::receive` and add `sui::transfer::public_receive`.
 // Version 32: Add delete functions for VerifiedID and VerifiedIssuer.
+//             Enforce upper bound for max epoch and accepts Google's other iss in zkLogin signature.
 
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
@@ -339,6 +340,10 @@ struct FeatureFlags {
     // If true, recompute has_public_transfer from the type instead of what is stored in the object
     #[serde(skip_serializing_if = "is_false")]
     recompute_has_public_transfer_in_execution: bool,
+
+    // If true, verify the upper bound of max_epoch in a zkLogin signature, also checks the new iss for Google.
+    #[serde(skip_serializing_if = "is_false")]
+    verify_zklogin_max_epoch_and_new_iss: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -1032,7 +1037,9 @@ impl ProtocolConfig {
     pub fn verify_legacy_zklogin_address(&self) -> bool {
         self.feature_flags.verify_legacy_zklogin_address
     }
-
+    pub fn verify_zklogin_max_epoch_and_new_iss(&self) -> bool {
+        self.feature_flags.verify_zklogin_max_epoch_and_new_iss
+    }
     pub fn throughput_aware_consensus_submission(&self) -> bool {
         self.feature_flags.throughput_aware_consensus_submission
     }
@@ -1647,7 +1654,9 @@ impl ProtocolConfig {
                         cfg.feature_flags.shared_object_deletion = true;
                     }
                 }
-                32 => {}
+                32 => {
+                    cfg.feature_flags.verify_zklogin_max_epoch_and_new_iss = true;
+                }
                 // Use this template when making changes:
                 //
                 //     // modify an existing constant.
