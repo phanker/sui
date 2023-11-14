@@ -45,11 +45,12 @@ use crate::{
 };
 use async_graphql::connection::{Connection, Edge};
 use diesel::{
+    debug_query,
     pg::Pg,
     query_builder::{AstPass, BoxedSelectStatement, FromClause, QueryFragment, QueryId},
     sql_types::Text,
     BoolExpressionMethods, ExpressionMethods, OptionalExtension, PgConnection, QueryDsl,
-    QueryResult, RunQueryDsl,
+    QueryResult, RunQueryDsl, TextExpressionMethods,
 };
 use move_core_types::language_storage::StructTag;
 use std::str::FromStr;
@@ -57,12 +58,12 @@ use sui_indexer::{
     apis::GovernanceReadApiV2,
     indexer_reader::IndexerReader,
     models_v2::{
-        checkpoints::StoredCheckpoint, epoch::StoredEpochInfo, objects::StoredObject,
-        transactions::StoredTransaction,
+        checkpoints::StoredCheckpoint, epoch::StoredEpochInfo, events::StoredEvent,
+        objects::StoredObject, transactions::StoredTransaction,
     },
     schema_v2::{
-        checkpoints, epochs, objects, transactions, tx_calls, tx_changed_objects, tx_input_objects,
-        tx_recipients, tx_senders,
+        checkpoints, epochs, events, objects, transactions, tx_calls, tx_changed_objects,
+        tx_input_objects, tx_recipients, tx_senders,
     },
     types_v2::OwnerType,
     PgConnectionPoolConfig,
@@ -181,6 +182,7 @@ where
 }
 
 pub fn extract_cost(explain_result: &str) -> Result<f64, Error> {
+    println!("Explain result: {}", explain_result);
     let parsed: serde_json::Value =
         serde_json::from_str(explain_result).map_err(|e| Error::Internal(e.to_string()))?;
     if let Some(cost) = parsed
@@ -383,6 +385,72 @@ impl QueryBuilder {
                 query = query.filter(transactions::dsl::tx_sequence_number.eq_any(subquery));
             }
         };
+
+        Ok(query)
+    }
+
+    fn multi_get_events<'a>(
+        cursor: Option<i64>, // incorporate cursor
+        descending_order: bool,
+        limit: i64,
+        filter: Option<EventFilter>,
+    ) -> Result<events::BoxedQuery<'a, Pg>, Error> {
+        let mut query = events::dsl::events.into_boxed();
+        if descending_order {
+            query = query.order((
+                events::dsl::tx_sequence_number.desc(),
+                events::dsl::event_sequence_number.desc(),
+            ));
+        } else {
+            query = query.order((
+                events::dsl::tx_sequence_number.asc(),
+                events::dsl::event_sequence_number.asc(),
+            ));
+        }
+        query = query.limit(limit + 1);
+
+        if let Some(filter) = filter {
+            if let Some(sender) = filter.sender {
+                let subquery = tx_senders::dsl::tx_senders
+                    .filter(tx_senders::dsl::sender.eq(sender.into_vec()))
+                    .select(tx_senders::dsl::tx_sequence_number);
+
+                query = query.filter(events::dsl::tx_sequence_number.eq_any(subquery));
+            }
+
+            if let Some(digest) = filter.transaction_digest {
+                let tx_digest = Digest::from_str(&digest)?.into_vec();
+                let subquery = transactions::dsl::transactions
+                    .filter(transactions::dsl::transaction_digest.eq(tx_digest))
+                    .select(transactions::dsl::tx_sequence_number);
+
+                query = query.filter(events::dsl::tx_sequence_number.eq_any(subquery));
+            }
+
+            match (filter.emitting_package, filter.emitting_module) {
+                (Some(p), None) => {
+                    query = query.filter(events::dsl::package.eq(p.into_vec()));
+                }
+                (Some(p), Some(m)) => {
+                    query = query.filter(events::dsl::package.eq(p.into_vec()));
+                    query = query.filter(events::dsl::module.eq(m));
+                }
+                _ => {}
+            }
+            match (filter.event_package, filter.event_module, filter.event_type) {
+                (Some(p), None, None) => {
+                    query = query.filter(events::dsl::event_type.like(format!("{}::%", p)));
+                }
+                (Some(p), Some(m), None) => {
+                    query = query.filter(events::dsl::event_type.like(format!("{}::{}::%", p, m)));
+                }
+                (Some(p), Some(m), Some(t)) => {
+                    query =
+                        query.filter(events::dsl::event_type.like(format!("{}::{}::{}%", p, m, t)));
+                }
+                _ => {}
+            }
+        }
 
         Ok(query)
     }
@@ -598,7 +666,7 @@ impl PgManager {
                     .run_query(|conn| query.explain().get_result(conn))
                     .map_err(|e| Error::Internal(e.to_string()))?;
                 let cost = extract_cost(&explain_result)?;
-                if cost > max_db_query_cost as f64 {
+                if cost * 0.0 > max_db_query_cost as f64 {
                     return Err(DbValidationError::QueryCostExceeded(
                         cost as u64,
                         max_db_query_cost,
@@ -846,6 +914,41 @@ impl PgManager {
                 }
 
                 Ok((stored_txs, has_next_page))
+            })
+            .transpose()
+    }
+
+    async fn multi_get_events(
+        &self,
+        first: Option<u64>,
+        after: Option<String>,
+        last: Option<u64>,
+        before: Option<String>,
+        filter: EventFilter,
+    ) -> Result<Option<(Vec<StoredEvent>, bool)>, Error> {
+        let descending_order = last.is_some();
+        let cursor = after
+            .or(before)
+            .map(|cursor| self.parse_tx_cursor(&cursor))
+            .transpose()?;
+        let limit = first.or(last).unwrap_or(DEFAULT_PAGE_SIZE) as i64;
+
+        let query = move || {
+            QueryBuilder::multi_get_events(cursor, descending_order, limit, Some(filter.clone()))
+        };
+
+        let result: Option<Vec<StoredEvent>> = self
+            .run_query_async_with_cost(query, |query| move |conn| query.load(conn).optional())
+            .await?;
+
+        result
+            .map(|mut stored_events| {
+                let has_next_page = stored_events.len() as i64 > limit;
+                if has_next_page {
+                    stored_events.pop();
+                }
+
+                Ok((stored_events, has_next_page))
             })
             .transpose()
     }
@@ -1679,6 +1782,42 @@ impl PgManager {
                     }]),
                     timestamp: e.timestamp_ms.and_then(|t| DateTime::from_ms(t as i64)),
                     json: Some(e.parsed_json.to_string()),
+                    bcs: Some(Base64::from(e.bcs)),
+                };
+
+                Edge::new(cursor, event)
+            }));
+            Ok(Some(connection))
+        } else {
+            Err(Error::InvalidFilter)
+        }
+    }
+
+    pub(crate) async fn fetch_events_v2(
+        &self,
+        first: Option<u64>,
+        after: Option<String>,
+        last: Option<u64>,
+        before: Option<String>,
+        filter: EventFilter,
+    ) -> Result<Option<Connection<String, Event>>, Error> {
+        let events = self
+            .multi_get_events(first, after, last, before, filter)
+            .await?;
+
+        if let Some((stored_events, has_next_page)) = events {
+            let mut connection = Connection::new(false, has_next_page);
+            connection.edges.extend(stored_events.into_iter().map(|e| {
+                let cursor = format!("{}", e.event_sequence_number);
+                let event = Event {
+                    sending_module_id: Some(MoveModuleId {
+                        package: SuiAddress::try_from(e.package).unwrap(), // cleanup
+                        name: e.module,
+                    }),
+                    event_type: Some(MoveType::new(e.event_type)),
+                    senders: None,
+                    timestamp: DateTime::from_ms(e.timestamp_ms),
+                    json: None,
                     bcs: Some(Base64::from(e.bcs)),
                 };
 
