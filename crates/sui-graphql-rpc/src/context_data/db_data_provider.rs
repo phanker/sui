@@ -45,7 +45,6 @@ use crate::{
 };
 use async_graphql::connection::{Connection, Edge};
 use diesel::{
-    debug_query,
     pg::Pg,
     query_builder::{AstPass, BoxedSelectStatement, FromClause, QueryFragment, QueryId},
     sql_types::Text,
