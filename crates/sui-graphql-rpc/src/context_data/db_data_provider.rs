@@ -18,10 +18,10 @@ use crate::{
         epoch::Epoch,
         event::{Event, EventFilter},
         gas::{GasCostSummary, GasInput},
-        move_module::MoveModuleId,
         move_object::MoveObject,
         move_package::MovePackage,
         move_type::MoveType,
+        move_value::MoveValue,
         object::{Object, ObjectFilter},
         protocol_config::{ProtocolConfigAttr, ProtocolConfigFeatureFlag, ProtocolConfigs},
         safe_mode::SafeMode,
@@ -51,7 +51,6 @@ use diesel::{
     BoolExpressionMethods, ExpressionMethods, OptionalExtension, PgConnection, QueryDsl,
     QueryResult, RunQueryDsl, TextExpressionMethods,
 };
-use move_core_types::language_storage::StructTag;
 use std::str::FromStr;
 use sui_indexer::{
     apis::GovernanceReadApiV2,
@@ -72,18 +71,16 @@ use sui_json_rpc::{
     name_service::{Domain, NameRecord, NameServiceConfig},
 };
 use sui_json_rpc_types::{
-    EventFilter as RpcEventFilter, ProtocolConfigResponse, Stake as RpcStakedSui,
-    SuiTransactionBlockEffects,
+    ProtocolConfigResponse, Stake as RpcStakedSui, SuiTransactionBlockEffects,
 };
 use sui_protocol_config::{ProtocolConfig, ProtocolVersion};
 use sui_types::{
+    base_types::MoveObjectType,
     base_types::SuiAddress as NativeSuiAddress,
-    base_types::{MoveObjectType, ObjectID},
     digests::ChainIdentifier,
     digests::TransactionDigest,
     dynamic_field::{DynamicFieldType, Field},
     effects::TransactionEffects,
-    event::EventID,
     gas_coin::GAS,
     governance::StakedSui as NativeStakedSui,
     messages_checkpoint::{
@@ -95,7 +92,6 @@ use sui_types::{
     transaction::{
         GenesisObject, SenderSignedData, TransactionDataAPI, TransactionExpiration, TransactionKind,
     },
-    Identifier,
 };
 
 use super::DEFAULT_PAGE_SIZE;
@@ -389,12 +385,21 @@ impl QueryBuilder {
     }
 
     fn multi_get_events<'a>(
-        cursor: Option<i64>, // incorporate cursor
+        cursor: Option<(i64, i64)>,
         descending_order: bool,
         limit: i64,
         filter: Option<EventFilter>,
     ) -> Result<events::BoxedQuery<'a, Pg>, Error> {
         let mut query = events::dsl::events.into_boxed();
+        if let Some(cursor_val) = cursor {
+            if descending_order {
+                query = query.filter(events::dsl::tx_sequence_number.lt(cursor_val.0));
+                query = query.filter(events::dsl::event_sequence_number.lt(cursor_val.1));
+            } else {
+                query = query.filter(events::dsl::tx_sequence_number.gt(cursor_val.0));
+                query = query.filter(events::dsl::event_sequence_number.gt(cursor_val.1));
+            }
+        }
         if descending_order {
             query = query.order((
                 events::dsl::tx_sequence_number.desc(),
@@ -436,6 +441,7 @@ impl QueryBuilder {
                 }
                 _ => {}
             }
+
             match (filter.event_package, filter.event_module, filter.event_type) {
                 (Some(p), None, None) => {
                     query = query.filter(events::dsl::event_type.like(format!("{}::%", p)));
@@ -923,18 +929,17 @@ impl PgManager {
         after: Option<String>,
         last: Option<u64>,
         before: Option<String>,
-        filter: EventFilter,
+        filter: Option<EventFilter>,
     ) -> Result<Option<(Vec<StoredEvent>, bool)>, Error> {
         let descending_order = last.is_some();
         let cursor = after
             .or(before)
-            .map(|cursor| self.parse_tx_cursor(&cursor))
+            .map(|cursor| self.parse_event_cursor(&cursor))
             .transpose()?;
         let limit = first.or(last).unwrap_or(DEFAULT_PAGE_SIZE) as i64;
 
-        let query = move || {
-            QueryBuilder::multi_get_events(cursor, descending_order, limit, Some(filter.clone()))
-        };
+        let query =
+            move || QueryBuilder::multi_get_events(cursor, descending_order, limit, filter.clone());
 
         let result: Option<Vec<StoredEvent>> = self
             .run_query_async_with_cost(query, |query| move |conn| query.load(conn).optional())
@@ -1057,8 +1062,34 @@ impl PgManager {
         Ok(sequence_number)
     }
 
-    pub(crate) fn parse_event_cursor(&self, cursor: String) -> Result<EventID, Error> {
-        EventID::try_from(cursor).map_err(|_| Error::InvalidCursor("event".to_string()))
+    pub(crate) fn parse_event_cursor(&self, cursor: &str) -> Result<(i64, i64), Error> {
+        let mut parts = cursor.split(':');
+        let tx_sequence_number = parts
+            .next()
+            .ok_or_else(|| {
+                Error::InvalidCursor(
+                    "Failed to parse tx_sequence_number from event cursor".to_string(),
+                )
+            })?
+            .parse::<i64>()
+            .map_err(|_| Error::InvalidCursor("Failed to convert str to i64".to_string()))?;
+        let event_sequence_number = parts
+            .next()
+            .ok_or_else(|| {
+                Error::InvalidCursor(
+                    "Failed to parse event_sequence_number from event cursor".to_string(),
+                )
+            })?
+            .parse::<i64>()
+            .map_err(|_| Error::InvalidCursor("Failed to convert str to i64".to_string()))?;
+        Ok((tx_sequence_number, event_sequence_number))
+    }
+
+    pub(crate) fn build_event_cursor(&self, event: &StoredEvent) -> String {
+        format!(
+            "{}:{}",
+            event.tx_sequence_number, event.event_sequence_number
+        )
     }
 
     pub(crate) fn validate_package_dependencies(
@@ -1713,92 +1744,7 @@ impl PgManager {
         after: Option<String>,
         last: Option<u64>,
         before: Option<String>,
-        filter: EventFilter,
-    ) -> Result<Option<Connection<String, Event>>, Error> {
-        let event_filter: Result<RpcEventFilter, Error> = if let Some(sender) = filter.sender {
-            let sender = NativeSuiAddress::from_bytes(sender.into_array())
-                .map_err(|_| Error::InvalidFilter)?;
-            Ok(RpcEventFilter::Sender(sender))
-        } else if let Some(digest) = filter.transaction_digest {
-            let digest = TransactionDigest::from_str(&digest).map_err(|_| Error::InvalidFilter)?;
-            Ok(RpcEventFilter::Transaction(digest))
-        } else if let Some(package) = filter.emitting_package {
-            if let Some(module) = filter.emitting_module {
-                let package =
-                    ObjectID::from_bytes(package.into_array()).map_err(|_| Error::InvalidFilter)?;
-                let module = Identifier::from_str(&module).map_err(|_| Error::InvalidFilter)?;
-                Ok(RpcEventFilter::MoveModule { package, module })
-            } else {
-                let package =
-                    ObjectID::from_bytes(package.into_array()).map_err(|_| Error::InvalidFilter)?;
-                Ok(RpcEventFilter::Package(package))
-            }
-        } else if let Some(event_type) = filter.event_type {
-            let event_type = StructTag::from_str(&event_type).map_err(|_| Error::InvalidFilter)?;
-            Ok(RpcEventFilter::MoveEventType(event_type))
-        } else if let Some(package) = filter.event_package {
-            if let Some(module) = filter.event_module {
-                let package =
-                    ObjectID::from_bytes(package.into_array()).map_err(|_| Error::InvalidFilter)?;
-                let module = Identifier::from_str(&module).map_err(|_| Error::InvalidFilter)?;
-                Ok(RpcEventFilter::MoveModule { package, module })
-            } else {
-                let package =
-                    ObjectID::from_bytes(package.into_array()).map_err(|_| Error::InvalidFilter)?;
-                Ok(RpcEventFilter::Package(package))
-            }
-        } else {
-            return Err(Error::InvalidFilter);
-        };
-
-        let descending_order = before.is_some();
-        let limit = first.or(last).unwrap_or(DEFAULT_PAGE_SIZE) as usize;
-        let cursor = after
-            .or(before)
-            .map(|c| self.parse_event_cursor(c))
-            .transpose()?;
-        if let Ok(event_filter) = event_filter {
-            let results = self
-                .inner
-                .query_events_in_blocking_task(event_filter, cursor, limit, descending_order)
-                .await?;
-
-            let has_next_page = results.len() > limit;
-
-            let mut connection = Connection::new(false, has_next_page);
-            connection.edges.extend(results.into_iter().map(|e| {
-                let cursor = String::from(e.id);
-                let event = Event {
-                    sending_module_id: Some(MoveModuleId {
-                        package: SuiAddress::from_array(**e.package_id),
-                        name: e.transaction_module.to_string(),
-                    }),
-                    event_type: Some(MoveType::new(
-                        e.type_.to_canonical_string(/* with_prefix */ true),
-                    )),
-                    senders: Some(vec![Address {
-                        address: SuiAddress::from_array(e.sender.to_inner()),
-                    }]),
-                    timestamp: e.timestamp_ms.and_then(|t| DateTime::from_ms(t as i64)),
-                    json: Some(e.parsed_json.to_string()),
-                    bcs: Some(Base64::from(e.bcs)),
-                };
-
-                Edge::new(cursor, event)
-            }));
-            Ok(Some(connection))
-        } else {
-            Err(Error::InvalidFilter)
-        }
-    }
-
-    pub(crate) async fn fetch_events_v2(
-        &self,
-        first: Option<u64>,
-        after: Option<String>,
-        last: Option<u64>,
-        before: Option<String>,
-        filter: EventFilter,
+        filter: Option<EventFilter>,
     ) -> Result<Option<Connection<String, Event>>, Error> {
         let events = self
             .multi_get_events(first, after, last, before, filter)
@@ -1807,19 +1753,12 @@ impl PgManager {
         if let Some((stored_events, has_next_page)) = events {
             let mut connection = Connection::new(false, has_next_page);
             connection.edges.extend(stored_events.into_iter().map(|e| {
-                let cursor = format!("{}", e.event_sequence_number);
+                let cursor = self.build_event_cursor(&e);
+                let contents = MoveValue::new(e.event_type.clone(), Base64::from(e.bcs.clone()));
                 let event = Event {
-                    sending_module_id: Some(MoveModuleId {
-                        package: SuiAddress::try_from(e.package).unwrap(), // cleanup
-                        name: e.module,
-                    }),
-                    event_type: Some(MoveType::new(e.event_type)),
-                    senders: None,
-                    timestamp: DateTime::from_ms(e.timestamp_ms),
-                    json: None,
-                    bcs: Some(Base64::from(e.bcs)),
+                    stored: e,
+                    contents,
                 };
-
                 Edge::new(cursor, event)
             }));
             Ok(Some(connection))
