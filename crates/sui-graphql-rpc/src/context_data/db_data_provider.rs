@@ -671,7 +671,7 @@ impl PgManager {
                     .run_query(|conn| query.explain().get_result(conn))
                     .map_err(|e| Error::Internal(e.to_string()))?;
                 let cost = extract_cost(&explain_result)?;
-                if cost * 0.0 > max_db_query_cost as f64 {
+                if cost > max_db_query_cost as f64 {
                     return Err(DbValidationError::QueryCostExceeded(
                         cost as u64,
                         max_db_query_cost,
