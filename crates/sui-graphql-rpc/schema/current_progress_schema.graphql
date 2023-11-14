@@ -313,27 +313,39 @@ type Epoch {
 }
 
 type Event {
+	type: MoveType!
+	bcs: Base64!
 	"""
-	Package id and module name of Move module that the event was emitted in
+	Structured contents of a Move value.
+	"""
+	data: MoveData!
+	"""
+	Representation of a Move value in JSON, where:
+	
+	- Addresses and UIDs are represented in canonical form, as JSON strings.
+	- Bools are represented by JSON boolean literals.
+	- u8, u16, and u32 are represented as JSON numbers.
+	- u64, u128, and u256 are represented as JSON strings.
+	- Vectors are represented by JSON arrays.
+	- Structs are represented by JSON objects.
+	- Empty optional values are represented by `null`.
+	
+	This form is offered as a less verbose convenience in cases where the layout of the type is
+	known by the client.
+	"""
+	json: JSON!
+	"""
+	Package id and module name of the Move module that the event was emitted in
 	"""
 	sendingModuleId: MoveModuleId
 	"""
-	Package, module, and type of the event
+	Addresses of the senders of the event
 	"""
-	eventType: MoveType
 	senders: [Address!]
 	"""
 	UTC timestamp in milliseconds since epoch (1/1/1970)
 	"""
 	timestamp: DateTime
-	"""
-	JSON string representation of the event
-	"""
-	json: String
-	"""
-	Base64 encoded bcs bytes of the Move event
-	"""
-	bcs: Base64
 }
 
 type EventConnection {
@@ -909,7 +921,7 @@ type Query {
 	transactionBlock(digest: String!): TransactionBlock
 	checkpointConnection(first: Int, after: String, last: Int, before: String): CheckpointConnection
 	transactionBlockConnection(first: Int, after: String, last: Int, before: String, filter: TransactionBlockFilter): TransactionBlockConnection
-	eventConnection(first: Int, after: String, last: Int, before: String, filter: EventFilter!): EventConnection
+	eventConnection(first: Int, after: String, last: Int, before: String, filter: EventFilter): EventConnection
 	objectConnection(first: Int, after: String, last: Int, before: String, filter: ObjectFilter): ObjectConnection
 	protocolConfig(protocolVersion: Int): ProtocolConfigs!
 	"""
