@@ -177,7 +177,6 @@ where
 }
 
 pub fn extract_cost(explain_result: &str) -> Result<f64, Error> {
-    println!("Explain result: {}", explain_result);
     let parsed: serde_json::Value =
         serde_json::from_str(explain_result).map_err(|e| Error::Internal(e.to_string()))?;
     if let Some(cost) = parsed
