@@ -13,7 +13,7 @@ pub use crate::checkpoints::checkpoint_output::{
     LogCheckpointOutput, SendCheckpointToStateSync, SubmitCheckpointToConsensus,
 };
 pub use crate::checkpoints::metrics::CheckpointMetrics;
-use crate::stake_aggregator::{InsertResult, StakeAggregator};
+use crate::stake_aggregator::{GenericMultiStakeAggregator, InsertResult, StakeAggregator};
 use crate::state_accumulator::StateAccumulator;
 use futures::future::{select, Either};
 use futures::FutureExt;
@@ -659,6 +659,10 @@ pub struct CheckpointSignatureAggregator {
     summary: CheckpointSummary,
     digest: CheckpointDigest,
     signatures: StakeAggregator<AuthoritySignInfo, true>,
+    /// Tallies voting stake for each signed checkpoint proposal by authority,
+    /// with weak quorum in order to detect split brain, i.e. 2 disjoint sets
+    /// of disagreeing authorities with greater than f+1 stake.
+    voting_history: GenericMultiStakeAggregator<CheckpointDigest, false>,
     metrics: Arc<CheckpointMetrics>,
 }
 
@@ -1278,6 +1282,9 @@ impl CheckpointAggregator {
                     digest: summary.digest(),
                     summary,
                     signatures: StakeAggregator::new(self.epoch_store.committee().clone()),
+                    voting_history: GenericMultiStakeAggregator::new(
+                        self.epoch_store.committee().clone(),
+                    ),
                     metrics: self.metrics.clone(),
                 });
                 self.current.as_mut().unwrap()
@@ -1356,24 +1363,24 @@ impl CheckpointSignatureAggregator {
         let their_digest = *data.summary.digest();
         let (_, signature) = data.summary.into_data_and_sig();
         let author = signature.authority;
-        // It is not guaranteed that signature.authority == narwhal_cert.author, but we do verify
-        // the signature so we know that the author signed the message at some point.
-        if their_digest != self.digest {
-            self.metrics.remote_checkpoint_forks.inc();
-            warn!(
-                checkpoint_seq = self.summary.sequence_number,
-                "Validator {:?} has mismatching checkpoint digest {}, we have digest {}",
-                author.concise(),
-                their_digest,
-                self.digest
-            );
-            return Err(());
-        }
-
         let envelope =
             SignedCheckpointSummary::new_from_data_and_sig(self.summary.clone(), signature);
-        match self.signatures.insert(envelope) {
-            InsertResult::Failed { error } => {
+        match (
+            self.signatures.insert(envelope),
+            self.voting_history.insert(author, their_digest),
+        ) {
+            (_, InsertResult::Failed { error }) => {
+                // Given that this is not aggregating signatures, return
+                // error on fail as this should never happen.
+                error!(
+                    checkpoint_seq = self.summary.sequence_number,
+                    "Failed to insert vote history for validator {:?}: {:?}",
+                    author.concise(),
+                    error
+                );
+                Err(())
+            }
+            (InsertResult::Failed { error }, _) => {
                 warn!(
                     checkpoint_seq = self.summary.sequence_number,
                     "Failed to aggregate new signature from validator {:?}: {:?}",
@@ -1382,11 +1389,55 @@ impl CheckpointSignatureAggregator {
                 );
                 Err(())
             }
-            InsertResult::QuorumReached(cert) => Ok(cert),
-            InsertResult::NotEnoughVotes {
-                bad_votes: _,
-                bad_authorities: _,
-            } => Err(()),
+            (InsertResult::QuorumReached(cert), _) => {
+                // It is not guaranteed that signature.authority == narwhal_cert.author, but we do verify
+                // the signature so we know that the author signed the message at some point.
+                if their_digest != self.digest {
+                    self.metrics.remote_checkpoint_forks.inc();
+                    warn!(
+                        checkpoint_seq = self.summary.sequence_number,
+                        "Validator {:?} has mismatching checkpoint digest {}, we have digest {}",
+                        author.concise(),
+                        their_digest,
+                        self.digest
+                    );
+                    return Err(());
+                }
+                Ok(cert)
+            }
+            (
+                InsertResult::NotEnoughVotes {
+                    bad_votes: _,
+                    bad_authorities: _,
+                },
+                InsertResult::QuorumReached(_),
+            ) => {
+                // As we have weak quorum against this checkpoint but not
+                // strong quorum, we must now ensure that we don't have
+                // weak quorum against any other digest we have so far seen
+                // as this would indicate a split brain condition.
+                let digests_with_weak_quorum: Vec<_> =
+                    self.voting_history.all_with_quorum().collect();
+                if digests_with_weak_quorum.len() > 1 {
+                    error!(
+                        checkpoint_seq = self.summary.sequence_number,
+                        "Split brain detected in checkpoint aggregation! Checkpoint digests with >f+1 stake of votes: {:?}",
+                        digests_with_weak_quorum,
+                    );
+                    self.metrics.split_brain_checkpoint_forks.inc();
+                    // TODO: at this point we should immediately halt processing
+                    // of new transaction certificates to avoid building on top of
+                    // forked output
+                }
+                Err(())
+            }
+            (
+                InsertResult::NotEnoughVotes {
+                    bad_votes: _,
+                    bad_authorities: _,
+                },
+                _,
+            ) => Err(()),
         }
     }
 }

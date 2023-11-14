@@ -93,6 +93,10 @@ impl<S: Clone + Eq, const STRENGTH: bool> StakeAggregator<S, STRENGTH> {
         self.data.contains_key(authority)
     }
 
+    pub fn keys(&self) -> impl Iterator<Item = &AuthorityName> {
+        self.data.keys()
+    }
+
     pub fn committee(&self) -> &Committee {
         &self.committee
     }
@@ -322,11 +326,22 @@ where
         }
     }
 
+    pub fn all_with_quorum(&self) -> impl Iterator<Item = &K> {
+        self.stake_maps
+            .iter()
+            .filter_map(|(k, agg)| if agg.has_quorum() { Some(k) } else { None })
+    }
+
     pub fn votes_for_authority(&self, authority: AuthorityName) -> u64 {
         self.votes_per_authority
             .get(&authority)
             .copied()
             .unwrap_or_default()
+    }
+
+    #[allow(dead_code)]
+    pub fn authorities_for_key(&self, k: &K) -> Option<impl Iterator<Item = &AuthorityName>> {
+        self.stake_maps.get(k).map(|agg| agg.keys())
     }
 }
 
