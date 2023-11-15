@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_INTERNAL_DATA_SOURCE_PORT"],"fn":["serve_executor","start_cluster","start_test_indexer"],"struct":["Cluster","ExecutorCluster"]};
